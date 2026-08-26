@@ -26,15 +26,23 @@ var symbols = []domain.Symbol{
 	{Code: "068270", Name: "셀트리온", Market: domain.MarketKOSPI, Currency: domain.KRW},
 	{Code: "247540", Name: "에코프로비엠", Market: domain.MarketKOSDAQ, Currency: domain.KRW},
 	{Code: "012340", Name: "한빛테크 (예시)", Market: domain.MarketKOSDAQ, Currency: domain.KRW},
+	{Code: "AAPL", Name: "Apple", Market: domain.MarketUS, Currency: domain.USD, Exchange: "ND"},
+	{Code: "NVDA", Name: "NVIDIA", Market: domain.MarketUS, Currency: domain.USD, Exchange: "ND"},
 }
 
 func (p *Provider) Instruments(context.Context) ([]domain.Symbol, error) {
 	return append([]domain.Symbol(nil), symbols...), nil
 }
 func (p *Provider) Accounts(context.Context) ([]domain.Account, error) {
-	return []domain.Account{{ID: "mock-nh", Name: "NH 샘플", Broker: p.ID(), Currency: domain.KRW}, {ID: "mock-kiwoom", Name: "키움 샘플", Broker: p.ID(), Currency: domain.KRW}}, nil
+	return []domain.Account{{ID: "mock-nh", Name: "NH 샘플", Broker: p.ID(), Currency: domain.KRW}, {ID: "mock-kiwoom", Name: "키움 국내 샘플", Broker: p.ID(), Currency: domain.KRW}, {ID: "mock-us", Name: "키움 미국 샘플", Broker: p.ID(), Currency: domain.USD}}, nil
 }
 func (p *Provider) Balance(_ context.Context, id string) (domain.Balance, error) {
+	if id == "mock-us" {
+		purchase := decimal.NewFromFloat(4200.50)
+		value := decimal.NewFromFloat(4588.20)
+		profit := value.Sub(purchase)
+		return domain.Balance{AccountID: id, Broker: p.ID(), Currency: domain.USD, Cash: decimal.NewFromFloat(812.45), PurchaseTotal: purchase, ValueTotal: value, ProfitLoss: profit, ProfitRate: profit.Div(purchase).Mul(decimal.NewFromInt(100)), AsOf: time.Now()}, nil
+	}
 	if id != "mock-nh" && id != "mock-kiwoom" {
 		return domain.Balance{}, fmt.Errorf("unknown mock account %s", id)
 	}
@@ -45,6 +53,7 @@ func (p *Provider) Balance(_ context.Context, id string) (domain.Balance, error)
 }
 func (p *Provider) Positions(_ context.Context, id string) ([]domain.Position, error) {
 	all := []domain.Position{{AccountID: "mock-nh", Broker: p.ID(), Symbol: symbols[0], Quantity: decimal.NewFromInt(150), Tradable: decimal.NewFromInt(150), AveragePrice: decimal.NewFromInt(76710), CurrentPrice: decimal.NewFromInt(82400), PurchaseValue: decimal.NewFromInt(11506500), MarketValue: decimal.NewFromInt(12360000), ProfitLoss: decimal.NewFromInt(853500), ProfitRate: decimal.NewFromFloat(7.42), AsOf: time.Now()}, {AccountID: "mock-kiwoom", Broker: p.ID(), Symbol: symbols[1], Quantity: decimal.NewFromInt(42), Tradable: decimal.NewFromInt(42), AveragePrice: decimal.NewFromInt(214760), CurrentPrice: decimal.NewFromInt(212250), PurchaseValue: decimal.NewFromInt(9019920), MarketValue: decimal.NewFromInt(8914500), ProfitLoss: decimal.NewFromInt(-105420), ProfitRate: decimal.NewFromFloat(-1.18), AsOf: time.Now()}}
+	all = append(all, domain.Position{AccountID: "mock-us", Broker: p.ID(), Symbol: symbols[7], Quantity: decimal.NewFromInt(20), Tradable: decimal.NewFromInt(20), AveragePrice: decimal.NewFromFloat(210.025), CurrentPrice: decimal.NewFromFloat(229.41), PurchaseValue: decimal.NewFromFloat(4200.50), MarketValue: decimal.NewFromFloat(4588.20), ProfitLoss: decimal.NewFromFloat(387.70), ProfitRate: decimal.NewFromFloat(9.23), AsOf: time.Now()})
 	var out []domain.Position
 	for _, position := range all {
 		if position.AccountID == id {
@@ -76,6 +85,10 @@ func basePrice(code string) float64 {
 		return 187200
 	case "247540":
 		return 153600
+	case "AAPL":
+		return 229.41
+	case "NVDA":
+		return 201.47
 	default:
 		return 32650
 	}

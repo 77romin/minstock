@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -91,9 +90,9 @@ func setup(provider string) error {
 	if provider != "kiwoom" && provider != "nh" {
 		return fmt.Errorf("지원하지 않는 증권사 %q", provider)
 	}
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Printf("%s App Key: ", strings.ToUpper(provider))
-	appKey, err := reader.ReadString('\n')
+	fmt.Printf("%s App Key (입력 숨김): ", strings.ToUpper(provider))
+	appKey, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
 	if err != nil {
 		return err
 	}
@@ -103,7 +102,7 @@ func setup(provider string) error {
 	if err != nil {
 		return err
 	}
-	if err := security.Save(provider, appKey, string(secret)); err != nil {
+	if err := security.Save(provider, string(appKey), string(secret)); err != nil {
 		return err
 	}
 	fmt.Println("OS 보안 키링에 저장했습니다. 다음 실행부터 자동 연결됩니다.")
@@ -116,12 +115,16 @@ func printDiagnosis(cfg config.Config) error {
 	fmt.Println("설정:", cfg.Path)
 	fmt.Println("데이터:", cfg.DataDir)
 	fmt.Println("SQLite:", cfg.DBPath())
-	for _, p := range []string{"kiwoom", "nh"} {
-		state := "미설정 (demo 모드 사용)"
-		if creds, err := security.Load(p); err == nil {
+	brokers := []struct {
+		name   string
+		broker config.Broker
+	}{{"kiwoom", cfg.Kiwoom}, {"nh", cfg.NH}}
+	for _, item := range brokers {
+		state := "미설정"
+		if creds, err := security.Load(item.name); err == nil {
 			state = "설정됨 (" + creds.Source + ")"
 		}
-		fmt.Printf("%-7s: %s\n", p, state)
+		fmt.Printf("%-7s: %-24s mode=%-4s endpoint=%s\n", item.name, state, item.broker.Mode, item.broker.BaseURL)
 	}
 	return nil
 }

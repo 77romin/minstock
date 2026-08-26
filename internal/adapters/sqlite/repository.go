@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS instruments (
   symbol TEXT NOT NULL,
   display_name TEXT NOT NULL,
   currency TEXT NOT NULL DEFAULT 'KRW',
+  exchange_code TEXT NOT NULL DEFAULT '',
   instrument_type TEXT NOT NULL DEFAULT 'stock',
   active INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL,
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS watchlist_items (
   symbol TEXT NOT NULL,
   display_name TEXT NOT NULL DEFAULT '',
   currency TEXT NOT NULL DEFAULT 'KRW',
+  exchange_code TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL,
   PRIMARY KEY(provider, group_id, market, symbol),
   FOREIGN KEY(provider, group_id) REFERENCES watchlists(provider, group_id) ON DELETE CASCADE
@@ -100,7 +102,42 @@ CREATE TABLE IF NOT EXISTS broker_sync_state (
 	if _, err := r.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate sqlite: %w", err)
 	}
-	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?)`, time.Now().UTC().Format(time.RFC3339Nano))
+	if err := r.ensureColumn(ctx, "instruments", "exchange_code", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := r.ensureColumn(ctx, "watchlist_items", "exchange_code", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?),(2, ?)`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (r *Repository) ensureColumn(ctx context.Context, table, column, definition string) error {
+	rows, err := r.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, kind string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == column {
+			found = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	_, err = r.db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+column+" "+definition)
 	return err
 }
 
@@ -110,15 +147,15 @@ func (r *Repository) UpsertInstruments(ctx context.Context, symbols []domain.Sym
 		return err
 	}
 	defer tx.Rollback()
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO instruments(provider,market,symbol,display_name,currency,updated_at)
-VALUES(?,?,?,?,?,?) ON CONFLICT(provider,market,symbol) DO UPDATE SET display_name=excluded.display_name,currency=excluded.currency,active=1,updated_at=excluded.updated_at`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO instruments(provider,market,symbol,display_name,currency,exchange_code,updated_at)
+VALUES(?,?,?,?,?,?,?) ON CONFLICT(provider,market,symbol) DO UPDATE SET display_name=excluded.display_name,currency=excluded.currency,exchange_code=excluded.exchange_code,active=1,updated_at=excluded.updated_at`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, s := range symbols {
-		if _, err := stmt.ExecContext(ctx, provider, s.Market, s.Code, s.Name, s.Currency, now); err != nil {
+		if _, err := stmt.ExecContext(ctx, provider, s.Market, s.Code, s.Name, s.Currency, s.Exchange, now); err != nil {
 			return err
 		}
 	}
@@ -131,7 +168,7 @@ func (r *Repository) SearchInstruments(ctx context.Context, query string, limit 
 	}
 	query = strings.TrimSpace(query)
 	pattern := "%" + strings.ReplaceAll(query, "%", "\\%") + "%"
-	rows, err := r.db.QueryContext(ctx, `SELECT market,symbol,display_name,currency FROM instruments
+	rows, err := r.db.QueryContext(ctx, `SELECT market,symbol,display_name,currency,exchange_code FROM instruments
 WHERE active=1 AND (symbol LIKE ? ESCAPE '\' OR display_name LIKE ? ESCAPE '\')
 ORDER BY CASE WHEN symbol=? THEN 0 WHEN display_name=? THEN 1 ELSE 2 END, display_name LIMIT ?`, pattern, pattern, query, query, limit)
 	if err != nil {
@@ -141,7 +178,7 @@ ORDER BY CASE WHEN symbol=? THEN 0 WHEN display_name=? THEN 1 ELSE 2 END, displa
 	var out []domain.Symbol
 	for rows.Next() {
 		var s domain.Symbol
-		if err := rows.Scan(&s.Market, &s.Code, &s.Name, &s.Currency); err != nil {
+		if err := rows.Scan(&s.Market, &s.Code, &s.Name, &s.Currency, &s.Exchange); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -169,14 +206,14 @@ ON CONFLICT(provider,group_id) DO UPDATE SET external_id=excluded.external_id,na
 	if _, err := tx.ExecContext(ctx, `DELETE FROM watchlist_items WHERE provider=? AND group_id=?`, group.Provider, group.ID); err != nil {
 		return err
 	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO watchlist_items(provider,group_id,market,symbol,display_name,currency,updated_at) VALUES(?,?,?,?,?,?,?)`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO watchlist_items(provider,group_id,market,symbol,display_name,currency,exchange_code,updated_at) VALUES(?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, item := range items {
-		if _, err := stmt.ExecContext(ctx, group.Provider, group.ID, item.Symbol.Market, item.Symbol.Code, item.Symbol.Name, item.Symbol.Currency, now); err != nil {
+		if _, err := stmt.ExecContext(ctx, group.Provider, group.ID, item.Symbol.Market, item.Symbol.Code, item.Symbol.Name, item.Symbol.Currency, item.Symbol.Exchange, now); err != nil {
 			return err
 		}
 	}
@@ -191,7 +228,7 @@ func (r *Repository) AddLocalWatchlistItem(ctx context.Context, symbol domain.Sy
 	if err := r.ensureLocalGroup(ctx); err != nil {
 		return err
 	}
-	_, err := r.db.ExecContext(ctx, `INSERT OR REPLACE INTO watchlist_items(provider,group_id,market,symbol,display_name,currency,updated_at) VALUES(?,?,?,?,?,?,?)`, domain.BrokerMock, "default", symbol.Market, symbol.Code, symbol.Name, symbol.Currency, time.Now().UTC().Format(time.RFC3339Nano))
+	_, err := r.db.ExecContext(ctx, `INSERT OR REPLACE INTO watchlist_items(provider,group_id,market,symbol,display_name,currency,exchange_code,updated_at) VALUES(?,?,?,?,?,?,?,?)`, domain.BrokerMock, "default", symbol.Market, symbol.Code, symbol.Name, symbol.Currency, symbol.Exchange, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
 }
 
@@ -202,7 +239,8 @@ func (r *Repository) RemoveLocalWatchlistItem(ctx context.Context, symbol domain
 
 func (r *Repository) ListWatchlist(ctx context.Context) ([]domain.WatchlistItem, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT MIN(w.provider),GROUP_CONCAT(DISTINCT w.group_id),i.market,i.symbol,
-COALESCE(NULLIF(MAX(i.display_name),''),NULLIF(MAX(x.display_name),''),i.symbol),MAX(i.currency)
+COALESCE(NULLIF(MAX(i.display_name),''),NULLIF(MAX(x.display_name),''),i.symbol),MAX(i.currency),
+COALESCE(NULLIF(MAX(i.exchange_code),''),MAX(x.exchange_code),'')
 FROM watchlist_items i
 JOIN watchlists w ON w.provider=i.provider AND w.group_id=i.group_id
 LEFT JOIN instruments x ON x.symbol=i.symbol AND x.active=1
@@ -214,7 +252,7 @@ GROUP BY i.market,i.symbol ORDER BY 5,i.symbol`)
 	var out []domain.WatchlistItem
 	for rows.Next() {
 		var item domain.WatchlistItem
-		if err := rows.Scan(&item.Provider, &item.GroupID, &item.Symbol.Market, &item.Symbol.Code, &item.Symbol.Name, &item.Symbol.Currency); err != nil {
+		if err := rows.Scan(&item.Provider, &item.GroupID, &item.Symbol.Market, &item.Symbol.Code, &item.Symbol.Name, &item.Symbol.Currency, &item.Symbol.Exchange); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

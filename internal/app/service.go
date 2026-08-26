@@ -142,6 +142,17 @@ func (s *Service) Dashboard(ctx context.Context) Snapshot {
 		}()
 	}
 	wg.Wait()
+	// Make held symbols searchable without downloading an entire overseas
+	// instrument master. This is especially useful for US positions.
+	byBroker := map[domain.BrokerID][]domain.Symbol{}
+	for _, position := range snap.Positions {
+		byBroker[position.Broker] = append(byBroker[position.Broker], position.Symbol)
+	}
+	for broker, symbols := range byBroker {
+		if err := s.repo.UpsertInstruments(ctx, symbols, broker); err != nil {
+			snap.Warnings = append(snap.Warnings, err.Error())
+		}
+	}
 	items, err := s.repo.ListWatchlist(ctx)
 	if err == nil {
 		snap.Watchlist = items
@@ -162,7 +173,7 @@ func (s *Service) Dashboard(ctx context.Context) Snapshot {
 		}
 		snap.Quotes[symbol.Key()] = q
 		report, ok := domain.ScoreSurge(q, decimal.NewFromFloat(2.8), decimal.NewFromFloat(3.2), domain.DefaultSurgePolicy())
-		if ok {
+		if ok && symbol.Currency == domain.KRW {
 			snap.Surges = append(snap.Surges, report)
 		}
 	}

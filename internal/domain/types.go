@@ -49,6 +49,9 @@ type Symbol struct {
 	Name     string
 	Market   Market
 	Currency Currency
+	// Exchange is the broker exchange code when a market requires routing
+	// (for example ND/NASDAQ, NY/NYSE, NA/AMEX).
+	Exchange string
 }
 
 func (s Symbol) Key() string { return string(s.Market) + ":" + s.Code }

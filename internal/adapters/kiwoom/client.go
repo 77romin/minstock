@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,36 @@ import (
 	"github.com/shopspring/decimal"
 	"golang.org/x/time/rate"
 )
+
+const (
+	accountDomestic = "kiwoom-domestic"
+	accountUS       = "kiwoom-us"
+)
+
+// This allowlist is an intentional safety boundary. The v0.1 program may call
+// only documented read APIs; order, amendment, and cancellation IDs are absent.
+var readOnlyAPIs = map[string]string{
+	"kt00018":  "/api/dostk/acnt",
+	"ka10001":  "/api/dostk/stkinfo",
+	"ka10099":  "/api/dostk/stkinfo",
+	"ka01300":  "/api/dostk/watchlist",
+	"ka01301":  "/api/dostk/watchlist",
+	"ka10079":  "/api/dostk/chart",
+	"ka10080":  "/api/dostk/chart",
+	"ka10081":  "/api/dostk/chart",
+	"ka10082":  "/api/dostk/chart",
+	"ka10083":  "/api/dostk/chart",
+	"ka10094":  "/api/dostk/chart",
+	"usa20100": "/api/us/mrkcond",
+	"ust21070": "/api/us/acnt",
+	"ust21110": "/api/us/acnt",
+	"usa06010": "/api/us/chart",
+	"usa06011": "/api/us/chart",
+	"usa06012": "/api/us/chart",
+	"usa06013": "/api/us/chart",
+	"usa06014": "/api/us/chart",
+	"usa06015": "/api/us/chart",
+}
 
 type Client struct {
 	baseURL string
@@ -108,6 +139,10 @@ func (c *Client) call(ctx context.Context, apiID, path string, requestBody any, 
 }
 
 func (c *Client) callPage(ctx context.Context, apiID, path string, requestBody any, out any, continuation, nextKey string) (string, string, error) {
+	allowedPath, allowed := readOnlyAPIs[apiID]
+	if !allowed || allowedPath != path {
+		return "", "", fmt.Errorf("kiwoom API %s %s is not in the read-only allowlist", apiID, path)
+	}
 	if err := c.limiter.Wait(ctx); err != nil {
 		return "", "", err
 	}
@@ -182,7 +217,10 @@ func safeMessage(status, code int, message string) string {
 }
 
 func (c *Client) Accounts(context.Context) ([]domain.Account, error) {
-	return []domain.Account{{ID: "kiwoom-default", Name: "키움 계좌", Broker: c.ID(), Currency: domain.KRW, Type: "token-bound"}}, nil
+	return []domain.Account{
+		{ID: accountDomestic, Name: "키움 국내주식", Broker: c.ID(), Currency: domain.KRW, Type: "domestic"},
+		{ID: accountUS, Name: "키움 미국주식", Broker: c.ID(), Currency: domain.USD, Type: "us"},
+	}, nil
 }
 
 type balanceResponse struct {
@@ -212,6 +250,9 @@ func (c *Client) fetchBalance(ctx context.Context) (balanceResponse, error) {
 }
 
 func (c *Client) Balance(ctx context.Context, accountID string) (domain.Balance, error) {
+	if accountID == accountUS {
+		return c.usBalance(ctx, accountID)
+	}
 	out, err := c.fetchBalance(ctx)
 	if err != nil {
 		return domain.Balance{}, err
@@ -220,6 +261,9 @@ func (c *Client) Balance(ctx context.Context, accountID string) (domain.Balance,
 }
 
 func (c *Client) Positions(ctx context.Context, accountID string) ([]domain.Position, error) {
+	if accountID == accountUS {
+		return c.usPositions(ctx, accountID)
+	}
 	out, err := c.fetchBalance(ctx)
 	if err != nil {
 		return nil, err
@@ -232,7 +276,82 @@ func (c *Client) Positions(ctx context.Context, accountID string) ([]domain.Posi
 	return positions, nil
 }
 
+type usBalanceResponse struct {
+	Currency    string `json:"crnc_code"`
+	Value       string `json:"tot_evlt_amt"`
+	Purchase    string `json:"tot_prch_amt"`
+	Profit      string `json:"tot_pl_amt"`
+	Rate        string `json:"tot_pl_rt"`
+	ValueKRW    string `json:"tot_evlt_amt_krw"`
+	PurchaseKRW string `json:"tot_prch_amt_krw"`
+	ProfitKRW   string `json:"tot_pl_amt_krw"`
+	Positions   []struct {
+		Exchange     string `json:"stex_nm"`
+		Currency     string `json:"crnc_code"`
+		Code         string `json:"stk_cd"`
+		Name         string `json:"frgn_stk_nm"`
+		Quantity     string `json:"poss_qty"`
+		Tradable     string `json:"sell_alowq"`
+		Average      string `json:"frgn_stk_book_uv"`
+		Price        string `json:"now_pric"`
+		Value        string `json:"evlt_amt"`
+		Profit       string `json:"pl_amt"`
+		Rate         string `json:"pl_rt"`
+		Purchase     string `json:"frgn_stk_book_amt"`
+		ExchangeRate string `json:"exch_rate"`
+	} `json:"result_list"`
+}
+
+func (c *Client) fetchUSBalance(ctx context.Context) (usBalanceResponse, error) {
+	var out usBalanceResponse
+	err := c.call(ctx, "ust21070", "/api/us/acnt", map[string]string{"stex_tp": "", "stk_cd": ""}, &out)
+	return out, err
+}
+
+func (c *Client) usBalance(ctx context.Context, accountID string) (domain.Balance, error) {
+	out, err := c.fetchUSBalance(ctx)
+	if err != nil {
+		return domain.Balance{}, err
+	}
+	cash := decimal.Zero
+	var deposit struct {
+		Rows []struct {
+			Currency string `json:"crnc_code"`
+			Cash     string `json:"fc_entra"`
+		} `json:"result_list"`
+	}
+	if err := c.call(ctx, "ust21110", "/api/us/acnt", map[string]string{}, &deposit); err == nil {
+		for _, row := range deposit.Rows {
+			if strings.EqualFold(row.Currency, "USD") {
+				cash = num(row.Cash)
+				break
+			}
+		}
+	}
+	return domain.Balance{AccountID: accountID, Broker: c.ID(), Currency: domain.USD, Cash: cash, PurchaseTotal: num(out.Purchase), ValueTotal: num(out.Value), ProfitLoss: signed(out.Profit), ProfitRate: signed(out.Rate), AsOf: time.Now()}, nil
+}
+
+func (c *Client) usPositions(ctx context.Context, accountID string) ([]domain.Position, error) {
+	out, err := c.fetchUSBalance(ctx)
+	if err != nil {
+		return nil, err
+	}
+	positions := make([]domain.Position, 0, len(out.Positions))
+	for _, p := range out.Positions {
+		currency := domain.USD
+		if p.Currency != "" && !strings.EqualFold(p.Currency, "USD") {
+			continue // v0.1 overseas portfolio scope is US stocks only.
+		}
+		symbol := domain.Symbol{Code: strings.TrimSpace(p.Code), Name: strings.TrimSpace(p.Name), Market: domain.MarketUS, Currency: currency, Exchange: normalizeUSExchange(p.Exchange)}
+		positions = append(positions, domain.Position{AccountID: accountID, Broker: c.ID(), Symbol: symbol, Quantity: num(p.Quantity), Tradable: num(p.Tradable), AveragePrice: num(p.Average), CurrentPrice: num(p.Price), PurchaseValue: num(p.Purchase), MarketValue: num(p.Value), ProfitLoss: signed(p.Profit), ProfitRate: signed(p.Rate), AsOf: time.Now()})
+	}
+	return positions, nil
+}
+
 func (c *Client) Quote(ctx context.Context, symbol domain.Symbol) (domain.Quote, error) {
+	if symbol.Market == domain.MarketUS || symbol.Currency == domain.USD {
+		return c.usQuote(ctx, symbol)
+	}
 	var out struct {
 		Code   string `json:"stk_cd"`
 		Name   string `json:"stk_nm"`
@@ -252,6 +371,58 @@ func (c *Client) Quote(ctx context.Context, symbol domain.Symbol) (domain.Quote,
 	}
 	now := time.Now()
 	return domain.Quote{Symbol: symbol, Price: num(out.Price), Open: num(out.Open), High: num(out.High), Low: num(out.Low), Change: signed(out.Change), ChangeRate: signed(out.Rate), Volume: intNum(out.Volume), MarketTime: now, ReceivedAt: now, Provider: c.ID(), Freshness: domain.FreshLive}, nil
+}
+
+func (c *Client) usQuote(ctx context.Context, symbol domain.Symbol) (domain.Quote, error) {
+	type response struct {
+		Exchange    string `json:"stex_tp"`
+		Code        string `json:"stk_cd"`
+		Name        string `json:"stk_nm"`
+		EnglishName string `json:"stk_enm"`
+		Price       string `json:"cur_prc"`
+		Change      string `json:"pred_pre"`
+		Rate        string `json:"flu_rt"`
+		Volume      string `json:"acc_trde_qty"`
+		Previous    string `json:"base_close_pric"`
+		Open        string `json:"open_pric"`
+		High        string `json:"high_pric"`
+		Low         string `json:"low_pric"`
+		PreOpen     string `json:"pre_open_pric"`
+		PreHigh     string `json:"pre_high_pric"`
+		PreLow      string `json:"pre_low_pric"`
+	}
+	var errs []error
+	for _, exchange := range usExchangeCandidates(symbol.Exchange) {
+		var out response
+		if err := c.call(ctx, "usa20100", "/api/us/mrkcond", map[string]string{"stex_tp": exchange, "stk_cd": symbol.Code}, &out); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !num(out.Price).IsPositive() {
+			errs = append(errs, fmt.Errorf("%s returned no price for %s", exchange, symbol.Code))
+			continue
+		}
+		if symbol.Name == "" {
+			symbol.Name = out.Name
+			if symbol.Name == "" {
+				symbol.Name = out.EnglishName
+			}
+		}
+		symbol.Market, symbol.Currency, symbol.Exchange = domain.MarketUS, domain.USD, exchange
+		open, high, low := out.Open, out.High, out.Low
+		if open == "" {
+			open = out.PreOpen
+		}
+		if high == "" {
+			high = out.PreHigh
+		}
+		if low == "" {
+			low = out.PreLow
+		}
+		now := time.Now()
+		return domain.Quote{Symbol: symbol, Price: num(out.Price), Previous: num(out.Previous), Open: num(open), High: num(high), Low: num(low), Change: signed(out.Change), ChangeRate: signed(out.Rate), Volume: intNum(out.Volume), MarketTime: now, ReceivedAt: now, Provider: c.ID(), Freshness: domain.FreshLive, SourceLabel: exchange}, nil
+	}
+	return domain.Quote{}, errors.Join(errs...)
 }
 
 // USDKRW reads the base exchange rate included in Kiwoom's official US-stock quote.
@@ -336,6 +507,9 @@ func (c *Client) WatchlistItems(ctx context.Context, groupID string) ([]domain.W
 }
 
 func (c *Client) Candles(ctx context.Context, q domain.CandleQuery) ([]domain.Candle, error) {
+	if q.Symbol.Market == domain.MarketUS || q.Symbol.Currency == domain.USD {
+		return c.usCandles(ctx, q)
+	}
 	apiID, pathKey := "ka10081", "stk_dt_pole_chart_qry"
 	body := map[string]string{"stk_cd": q.Symbol.Code, "base_dt": q.To.Format("20060102"), "upd_stkpc_tp": map[bool]string{true: "1", false: "0"}[q.Adjusted]}
 	switch q.Interval {
@@ -394,8 +568,116 @@ func (c *Client) Candles(ctx context.Context, q domain.CandleQuery) ([]domain.Ca
 	return candles, nil
 }
 
+func (c *Client) usCandles(ctx context.Context, q domain.CandleQuery) ([]domain.Candle, error) {
+	apiID := map[domain.CandleInterval]string{
+		domain.IntervalTick: "usa06010", domain.Interval1Min: "usa06011",
+		domain.Interval5Min: "usa06011", domain.Interval15Min: "usa06011",
+		domain.Interval60Min: "usa06011", domain.IntervalDay: "usa06012",
+		domain.IntervalWeek: "usa06013", domain.IntervalMonth: "usa06014",
+		domain.IntervalYear: "usa06015",
+	}[q.Interval]
+	if apiID == "" {
+		return nil, fmt.Errorf("unsupported US candle interval %s", q.Interval)
+	}
+	var errs []error
+	for _, exchange := range usExchangeCandidates(q.Symbol.Exchange) {
+		body := map[string]string{
+			"stex_tp": exchange, "stk_cd": q.Symbol.Code,
+			"upd_stkpc_tp": map[bool]string{true: "1", false: "0"}[q.Adjusted],
+			"exrt_appl_tp": "0",
+		}
+		switch q.Interval {
+		case domain.IntervalTick:
+			body["tic_scope"] = "1"
+		case domain.Interval1Min, domain.Interval5Min, domain.Interval15Min, domain.Interval60Min:
+			body["strt_dt"] = q.From.Format("20060102")
+			body["tic_scope"] = strings.TrimSuffix(string(q.Interval), "m")
+		default:
+			body["strt_dt"] = q.From.Format("20060102")
+		}
+		var out struct {
+			Rows []struct {
+				Close             string `json:"cur_prc"`
+				TradeVolume       string `json:"trde_qty"`
+				AccumulatedVolume string `json:"acc_trde_qty"`
+				Turnover          string `json:"acc_trde_prica"`
+				Open              string `json:"open_pric"`
+				High              string `json:"high_pric"`
+				Low               string `json:"low_pric"`
+				Time              string `json:"cntr_tm"`
+				Date              string `json:"dt"`
+			} `json:"result_list"`
+		}
+		if err := c.call(ctx, apiID, "/api/us/chart", body, &out); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if len(out.Rows) == 0 {
+			errs = append(errs, fmt.Errorf("%s returned no %s candles for %s", exchange, q.Interval, q.Symbol.Code))
+			continue
+		}
+		limit := q.Limit
+		if limit <= 0 || limit > len(out.Rows) {
+			limit = len(out.Rows)
+		}
+		loc := time.FixedZone("KST", 9*60*60)
+		candles := make([]domain.Candle, 0, limit)
+		symbol := q.Symbol
+		symbol.Market, symbol.Currency, symbol.Exchange = domain.MarketUS, domain.USD, exchange
+		for _, row := range out.Rows[:limit] {
+			stamp, layout := row.Date, "20060102"
+			if row.Time != "" {
+				stamp, layout = row.Time, "20060102150405"
+			}
+			openTime, err := time.ParseInLocation(layout, stamp, loc)
+			if err != nil {
+				continue
+			}
+			volume := row.TradeVolume
+			if volume == "" {
+				volume = row.AccumulatedVolume
+			}
+			candles = append(candles, domain.Candle{Symbol: symbol, Interval: q.Interval, OpenTime: openTime, CloseTime: closeTime(openTime, q.Interval), Open: num(row.Open), High: num(row.High), Low: num(row.Low), Close: num(row.Close), Volume: intNum(volume), Turnover: num(row.Turnover), Adjusted: q.Adjusted, Complete: true, Provider: c.ID()})
+		}
+		sort.Slice(candles, func(i, j int) bool { return candles[i].OpenTime.Before(candles[j].OpenTime) })
+		return candles, nil
+	}
+	return nil, errors.Join(errs...)
+}
+
+func normalizeUSExchange(value string) string {
+	v := strings.ToUpper(strings.TrimSpace(value))
+	switch {
+	case v == "ND" || strings.Contains(v, "NASDAQ") || strings.Contains(v, "나스닥"):
+		return "ND"
+	case v == "NY" || strings.Contains(v, "NYSE") || strings.Contains(v, "뉴욕"):
+		return "NY"
+	case v == "NA" || strings.Contains(v, "AMEX") || strings.Contains(v, "아멕스"):
+		return "NA"
+	default:
+		return ""
+	}
+}
+
+func usExchangeCandidates(preferred string) []string {
+	preferred = normalizeUSExchange(preferred)
+	all := []string{"ND", "NY", "NA"}
+	if preferred == "" {
+		return all
+	}
+	result := []string{preferred}
+	for _, exchange := range all {
+		if exchange != preferred {
+			result = append(result, exchange)
+		}
+	}
+	return result
+}
+
 func closeTime(t time.Time, i domain.CandleInterval) time.Time {
 	switch i {
+	case domain.IntervalTick:
+		return t.Add(time.Second)
 	case domain.Interval1Min:
 		return t.Add(time.Minute)
 	case domain.Interval5Min:
