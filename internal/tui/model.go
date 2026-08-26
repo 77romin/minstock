@@ -73,9 +73,18 @@ type Model struct {
 	pendingG      bool
 	searchEditing bool
 	notice        string
+	refreshing    bool
+	enriching     bool
+	syncing       bool
+	liveLoaded    bool
 }
 
+type cachedDashboardMsg struct {
+	snapshot app.Snapshot
+	err      error
+}
 type dashboardMsg struct{ snapshot app.Snapshot }
+type enrichmentMsg struct{ snapshot app.Snapshot }
 type searchMsg struct {
 	query   string
 	results []domain.Symbol
@@ -95,11 +104,20 @@ func New(service *app.Service, mode string, refreshEvery time.Duration) Model {
 	if refreshEvery < time.Second {
 		refreshEvery = 5 * time.Second
 	}
-	return Model{service: service, mode: mode, loading: true, width: 100, height: 30, intervalIndex: 5, refreshEvery: refreshEvery, portfolioTab: filterKR}
+	return Model{service: service, mode: mode, loading: true, refreshing: true, width: 100, height: 30, intervalIndex: 5, refreshEvery: refreshEvery, portfolioTab: filterKR}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.syncCmd(), m.dashboardCmd(), m.tickCmd())
+	return tea.Batch(m.cachedDashboardCmd(), m.dashboardCmd(), m.tickCmd())
+}
+
+func (m Model) cachedDashboardCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		snapshot, err := m.service.CachedDashboard(ctx)
+		return cachedDashboardMsg{snapshot: snapshot, err: err}
+	}
 }
 
 func (m Model) syncCmd() tea.Cmd {
@@ -114,7 +132,15 @@ func (m Model) dashboardCmd() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		return dashboardMsg{snapshot: m.service.Dashboard(ctx)}
+		return dashboardMsg{snapshot: m.service.DashboardCore(ctx)}
+	}
+}
+
+func (m Model) enrichmentCmd(snapshot app.Snapshot) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return enrichmentMsg{snapshot: m.service.EnrichDashboard(ctx, snapshot)}
 	}
 }
 
@@ -146,19 +172,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+	case cachedDashboardMsg:
+		if msg.err == nil && !m.liveLoaded {
+			m.snapshot = msg.snapshot
+			m.notice = "캐시 표시 · 최신 데이터 확인 중"
+		} else if msg.err != nil && !m.syncing {
+			// A first run has no cache or instrument index yet. Populate it once;
+			// subsequent starts use the cache and skip this expensive operation.
+			m.syncing = true
+			return m, m.syncCmd()
+		}
 	case dashboardMsg:
 		m.snapshot, m.loading, m.err = msg.snapshot, false, nil
+		m.refreshing, m.enriching, m.liveLoaded = false, true, true
+		m.notice = "계좌 갱신 완료 · 시세 보강 중"
+		return m, m.enrichmentCmd(msg.snapshot)
+	case enrichmentMsg:
+		m.snapshot, m.enriching = msg.snapshot, false
+		m.notice = "최신 데이터"
 	case syncMsg:
+		m.syncing = false
 		if len(msg.errs) > 0 {
 			m.err = msg.errs[0]
 		}
-		return m, m.dashboardCmd()
+		if !m.refreshing && !m.enriching {
+			m.refreshing = true
+			return m, m.dashboardCmd()
+		}
 	case watchlistMsg:
 		m.err = msg.err
 		if msg.err == nil {
 			m.notice = "관심종목을 갱신했습니다"
 		}
-		return m, m.dashboardCmd()
+		if !m.refreshing && !m.enriching {
+			m.refreshing = true
+			return m, m.dashboardCmd()
+		}
 	case searchMsg:
 		if msg.query == m.query {
 			m.results, m.err, m.cursor = msg.results, msg.err, 0
@@ -168,11 +217,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.candles, m.err, m.loading = msg.candles, msg.err, false
 		}
 	case refreshMsg:
-		if m.screen != detailScreen {
-			m.loading = true
-			return m, tea.Batch(m.dashboardCmd(), m.tickCmd())
+		nextTick := m.tickCmd()
+		if m.liveLoaded && time.Since(m.snapshot.LoadedAt) < m.refreshEvery {
+			return m, nextTick
 		}
-		return m, m.tickCmd()
+		if m.screen != detailScreen && !m.refreshing && !m.enriching && !m.syncing {
+			m.refreshing = true
+			m.notice = "최신 데이터 확인 중"
+			return m, tea.Batch(m.dashboardCmd(), nextTick)
+		}
+		return m, nextTick
 	case tea.KeyPressMsg:
 		return m.handleKey(msg.String())
 	}
@@ -189,7 +243,11 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		case "q":
 			return m, tea.Quit
 		case "r":
-			m.loading, m.notice = true, "새로고침 중"
+			if m.refreshing || m.enriching || m.syncing {
+				m.notice = "이미 데이터를 갱신하고 있습니다"
+				return m, nil
+			}
+			m.refreshing, m.notice = true, "새로고침 중"
 			return m, m.dashboardCmd()
 		case "?":
 			if m.screen == helpScreen {
@@ -198,7 +256,11 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 				m.previous, m.screen = m.screen, helpScreen
 			}
 		case "s":
-			m.loading, m.notice = true, "전체 동기화 중"
+			if m.syncing {
+				m.notice = "이미 전체 동기화 중입니다"
+				return m, nil
+			}
+			m.syncing, m.notice = true, "전체 동기화 중"
 			return m, m.syncCmd()
 		case "d":
 			if m.screen == diagnosticsScreen {
@@ -885,15 +947,46 @@ func (m Model) searchView() string {
 	if m.searchEditing {
 		caret = "█"
 	}
-	lines := []string{"종목 검색 [" + m.filterName() + "] > " + m.query + caret, ""}
+	lines := []string{"종목 검색 [" + m.filterName() + "] > " + m.query + caret, "", renderSearchHeader()}
 	for i, s := range m.filteredResults() {
-		line := fmt.Sprintf("%-2s %-10s %-22s %s", cursor(i, m.cursor), s.Code, trim(s.Name, 20), s.Market)
-		lines = append(lines, selectLine(line, i == m.cursor))
+		line := renderSearchRow(s)
+		prefix := "  "
+		if i == m.cursor {
+			prefix = brand.Render("> ")
+			line = selectedRow.Render(line)
+		}
+		lines = append(lines, prefix+line)
 	}
 	if len(m.results) == 0 {
 		lines = append(lines, "  이름 또는 종목코드를 입력하세요.")
 	}
 	return panel.Width(max(60, m.width-4)).Render(strings.Join(lines, "\n"))
+}
+
+var searchColumns = []portfolioColumn{
+	{"종목명", 20, false}, {"종목코드", 12, false}, {"시장", 10, false},
+	{"거래소", 10, false}, {"통화", 7, false},
+}
+
+func renderSearchHeader() string {
+	cells := make([]string, 0, len(searchColumns))
+	for _, column := range searchColumns {
+		cells = append(cells, fitCell(column.title, column.width, column.right))
+	}
+	return "  " + muted.Render(strings.Join(cells, " │ "))
+}
+
+func renderSearchRow(symbol domain.Symbol) string {
+	exchange := symbol.Exchange
+	if exchange == "" {
+		exchange = "-"
+	}
+	values := []string{symbol.Name, symbol.Code, string(symbol.Market), exchange, string(symbol.Currency)}
+	cells := make([]string, 0, len(searchColumns))
+	for index, column := range searchColumns {
+		cells = append(cells, fitCell(values[index], column.width, column.right))
+	}
+	return strings.Join(cells, " │ ")
 }
 
 func (m Model) watchlistView() string {
@@ -1015,11 +1108,11 @@ func (m Model) footer() string {
 		return brand.Render(" COMMAND :")
 	}
 	status := m.notice
-	if m.loading {
+	if m.loading || m.refreshing || m.enriching || m.syncing {
 		if status != "" {
 			status += " · "
 		}
-		status += "동기화 중…"
+		status += "갱신 중…"
 	}
 	base := " ↑↓/jk 선택  Enter 상세  / 검색  f 시장/보유탭  m 관심  : 명령"
 	if status != "" {

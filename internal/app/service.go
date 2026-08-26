@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -31,7 +32,10 @@ type Snapshot struct {
 	Surges    []domain.SurgeReport
 	Warnings  []string
 	LoadedAt  time.Time
+	Cached    bool `json:"-"`
 }
+
+const dashboardCacheKey = "dashboard:v1"
 
 func New(repo ports.Repository, providers []ports.Provider, instruments []ports.InstrumentProvider, watchlists []ports.WatchlistReader, fx []ports.FXProvider) *Service {
 	return &Service{repo: repo, providers: providers, instruments: instruments, watchlists: watchlists, fx: fx}
@@ -94,7 +98,35 @@ func (s *Service) Sync(ctx context.Context) []error {
 	return errs
 }
 
-func (s *Service) Dashboard(ctx context.Context) Snapshot {
+func (s *Service) CachedDashboard(ctx context.Context) (Snapshot, error) {
+	payload, _, err := s.repo.LoadCache(ctx, dashboardCacheKey)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	var snapshot Snapshot
+	if err := json.Unmarshal(payload, &snapshot); err != nil {
+		return Snapshot{}, fmt.Errorf("decode dashboard cache: %w", err)
+	}
+	if snapshot.Quotes == nil {
+		snapshot.Quotes = map[string]domain.Quote{}
+	}
+	snapshot.Cached = true
+	return snapshot, nil
+}
+
+func (s *Service) saveDashboard(ctx context.Context, snapshot Snapshot) error {
+	snapshot.Cached = false
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return fmt.Errorf("encode dashboard cache: %w", err)
+	}
+	return s.repo.SaveCache(ctx, dashboardCacheKey, payload)
+}
+
+// DashboardCore loads only the data required for the portfolio screens. Quotes
+// and surge analysis are deliberately deferred so the first useful frame does
+// not wait for every held and watched symbol.
+func (s *Service) DashboardCore(ctx context.Context) Snapshot {
 	snap := Snapshot{Quotes: map[string]domain.Quote{}, LoadedAt: time.Now()}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -141,7 +173,41 @@ func (s *Service) Dashboard(ctx context.Context) Snapshot {
 			}
 		}()
 	}
+	if len(s.fx) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for _, source := range s.fx {
+				rate, err := source.USDKRW(ctx)
+				if err == nil {
+					mu.Lock()
+					snap.FX = rate
+					mu.Unlock()
+					return
+				}
+			}
+		}()
+	}
 	wg.Wait()
+	items, err := s.repo.ListWatchlist(ctx)
+	if err == nil {
+		snap.Watchlist = items
+	} else {
+		snap.Warnings = append(snap.Warnings, err.Error())
+	}
+	if err := s.saveDashboard(ctx, snap); err != nil {
+		snap.Warnings = append(snap.Warnings, err.Error())
+	}
+	return snap
+}
+
+// EnrichDashboard fills market quotes and derived reports after the core
+// portfolio has already been rendered.
+func (s *Service) EnrichDashboard(ctx context.Context, snap Snapshot) Snapshot {
+	snap.Cached = false
+	if snap.Quotes == nil {
+		snap.Quotes = map[string]domain.Quote{}
+	}
 	// Make held symbols searchable without downloading an entire overseas
 	// instrument master. This is especially useful for US positions.
 	byBroker := map[domain.BrokerID][]domain.Symbol{}
@@ -152,12 +218,6 @@ func (s *Service) Dashboard(ctx context.Context) Snapshot {
 		if err := s.repo.UpsertInstruments(ctx, symbols, broker); err != nil {
 			snap.Warnings = append(snap.Warnings, err.Error())
 		}
-	}
-	items, err := s.repo.ListWatchlist(ctx)
-	if err == nil {
-		snap.Watchlist = items
-	} else {
-		snap.Warnings = append(snap.Warnings, err.Error())
 	}
 	seen := map[string]domain.Symbol{}
 	for _, position := range snap.Positions {
@@ -178,14 +238,15 @@ func (s *Service) Dashboard(ctx context.Context) Snapshot {
 		}
 	}
 	sort.Slice(snap.Surges, func(i, j int) bool { return snap.Surges[i].Score > snap.Surges[j].Score })
-	for _, source := range s.fx {
-		rate, err := source.USDKRW(ctx)
-		if err == nil {
-			snap.FX = rate
-			break
-		}
+	snap.LoadedAt = time.Now()
+	if err := s.saveDashboard(ctx, snap); err != nil {
+		snap.Warnings = append(snap.Warnings, err.Error())
 	}
 	return snap
+}
+
+func (s *Service) Dashboard(ctx context.Context) Snapshot {
+	return s.EnrichDashboard(ctx, s.DashboardCore(ctx))
 }
 
 func (s *Service) Quote(ctx context.Context, symbol domain.Symbol) (domain.Quote, error) {

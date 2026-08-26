@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"time"
 
 	"github.com/mink/stock-min-tui/internal/domain"
 )
@@ -46,6 +47,8 @@ type Repository interface {
 	ListWatchlist(context.Context) ([]domain.WatchlistItem, error)
 	AddLocalWatchlistItem(context.Context, domain.Symbol) error
 	RemoveLocalWatchlistItem(context.Context, domain.Symbol) error
+	SaveCache(context.Context, string, []byte) error
+	LoadCache(context.Context, string) ([]byte, time.Time, error)
 	SaveCandles(context.Context, []domain.Candle) error
 	LoadCandles(context.Context, domain.CandleQuery) ([]domain.Candle, error)
 	Close() error

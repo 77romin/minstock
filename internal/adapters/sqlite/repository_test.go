@@ -103,3 +103,23 @@ func TestMigrationRemovesDemoWatchlistButKeepsLocalItems(t *testing.T) {
 		t.Fatalf("watchlist cleanup: %#v, %v", items, err)
 	}
 }
+
+func TestDashboardCacheRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	repo, err := Open(filepath.Join(t.TempDir(), "minstock.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	if err := repo.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte(`{"version":1,"positions":2}`)
+	if err := repo.SaveCache(ctx, "dashboard:v1", want); err != nil {
+		t.Fatal(err)
+	}
+	got, updatedAt, err := repo.LoadCache(ctx, "dashboard:v1")
+	if err != nil || string(got) != string(want) || updatedAt.IsZero() {
+		t.Fatalf("cache round trip: payload=%q updated=%s err=%v", got, updatedAt, err)
+	}
+}

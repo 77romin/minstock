@@ -98,6 +98,11 @@ CREATE TABLE IF NOT EXISTS broker_sync_state (
   status TEXT NOT NULL,
   message TEXT NOT NULL DEFAULT '',
   PRIMARY KEY(provider, resource)
+);
+CREATE TABLE IF NOT EXISTS app_cache (
+  cache_key TEXT PRIMARY KEY,
+  payload BLOB NOT NULL,
+  updated_at TEXT NOT NULL
 );`
 	if _, err := r.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate sqlite: %w", err)
@@ -114,8 +119,28 @@ CREATE TABLE IF NOT EXISTS broker_sync_state (
 		return fmt.Errorf("remove legacy demo watchlists: %w", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?),(2, ?),(3, ?)`, now, now, now)
+	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?),(2, ?),(3, ?),(4, ?)`, now, now, now, now)
 	return err
+}
+
+func (r *Repository) SaveCache(ctx context.Context, key string, payload []byte) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO app_cache(cache_key,payload,updated_at) VALUES(?,?,?)
+ON CONFLICT(cache_key) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at`,
+		key, payload, time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (r *Repository) LoadCache(ctx context.Context, key string) ([]byte, time.Time, error) {
+	var payload []byte
+	var updatedAt string
+	if err := r.db.QueryRowContext(ctx, `SELECT payload,updated_at FROM app_cache WHERE cache_key=?`, key).Scan(&payload, &updatedAt); err != nil {
+		return nil, time.Time{}, err
+	}
+	stamp, err := time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	return payload, stamp, nil
 }
 
 func (r *Repository) ensureColumn(ctx context.Context, table, column, definition string) error {

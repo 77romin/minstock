@@ -32,9 +32,17 @@ func TestDemoServiceEndToEnd(t *testing.T) {
 	if err != nil || len(results) == 0 {
 		t.Fatalf("search: %#v %v", results, err)
 	}
-	snapshot := service.Dashboard(ctx)
+	core := service.DashboardCore(ctx)
+	if len(core.Positions) == 0 || len(core.Watchlist) == 0 || core.FX.Rate.IsZero() || len(core.Quotes) != 0 {
+		t.Fatalf("incomplete core snapshot: %#v", core)
+	}
+	snapshot := service.EnrichDashboard(ctx, core)
 	if len(snapshot.Positions) == 0 || len(snapshot.Watchlist) == 0 || snapshot.FX.Rate.IsZero() {
 		t.Fatalf("incomplete snapshot: %#v", snapshot)
+	}
+	cached, err := service.CachedDashboard(ctx)
+	if err != nil || !cached.Cached || len(cached.Positions) != len(snapshot.Positions) || len(cached.Quotes) != len(snapshot.Quotes) {
+		t.Fatalf("cached snapshot: %#v %v", cached, err)
 	}
 	candles, err := service.Candles(ctx, domain.CandleQuery{Symbol: results[0], Interval: domain.IntervalDay, From: time.Now().AddDate(-3, 0, 0), To: time.Now(), Limit: 180})
 	if err != nil || len(candles) < 120 {

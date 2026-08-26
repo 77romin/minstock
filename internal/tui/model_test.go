@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/mink/stock-min-tui/internal/app"
@@ -201,5 +202,54 @@ func TestSearchHasEditAndNormalModes(t *testing.T) {
 	m = next.(Model)
 	if m.searchEditing {
 		t.Fatal("enter must leave search edit mode")
+	}
+}
+
+func TestSearchViewRendersAlignedTable(t *testing.T) {
+	kr := domain.Symbol{Code: "005930", Name: "삼성전자", Market: domain.MarketKOSPI, Currency: domain.KRW}
+	us := domain.Symbol{Code: "AAPL", Name: "Apple", Market: domain.MarketUS, Currency: domain.USD, Exchange: "ND"}
+	m := Model{screen: searchScreen, width: 100, results: []domain.Symbol{kr, us}}
+	view := m.searchView()
+	for _, header := range []string{"종목명", "종목코드", "시장", "거래소", "통화"} {
+		if !strings.Contains(view, header) {
+			t.Fatalf("missing search column %q: %q", header, view)
+		}
+	}
+	for _, value := range []string{"삼성전자", "005930", "Apple", "AAPL", "ND", "USD"} {
+		if !strings.Contains(view, value) {
+			t.Fatalf("missing search value %q: %q", value, view)
+		}
+	}
+	if lipgloss.Width(renderSearchHeader()) != lipgloss.Width("  "+renderSearchRow(kr)) {
+		t.Fatalf("search header and row widths differ: header=%d row=%d", lipgloss.Width(renderSearchHeader()), lipgloss.Width("  "+renderSearchRow(kr)))
+	}
+}
+
+func TestProgressiveDashboardMessagesPreferLiveData(t *testing.T) {
+	cached := app.Snapshot{Cached: true, Positions: []domain.Position{{Symbol: domain.Symbol{Code: "CACHE"}}}}
+	live := app.Snapshot{Positions: []domain.Position{{Symbol: domain.Symbol{Code: "LIVE"}}}, LoadedAt: time.Now()}
+	enriched := live
+	enriched.Quotes = map[string]domain.Quote{"LIVE": {}}
+
+	m := Model{refreshing: true, loading: true, refreshEvery: 5 * time.Second}
+	next, _ := m.Update(cachedDashboardMsg{snapshot: cached})
+	m = next.(Model)
+	if m.snapshot.Positions[0].Symbol.Code != "CACHE" || !m.loading {
+		t.Fatalf("cached snapshot was not shown first: %#v", m)
+	}
+	next, cmd := m.Update(dashboardMsg{snapshot: live})
+	m = next.(Model)
+	if cmd == nil || !m.liveLoaded || !m.enriching || m.loading || m.snapshot.Positions[0].Symbol.Code != "LIVE" {
+		t.Fatalf("live core did not replace cache: %#v", m)
+	}
+	next, _ = m.Update(cachedDashboardMsg{snapshot: cached})
+	m = next.(Model)
+	if m.snapshot.Positions[0].Symbol.Code != "LIVE" {
+		t.Fatal("late cache message overwrote live data")
+	}
+	next, _ = m.Update(enrichmentMsg{snapshot: enriched})
+	m = next.(Model)
+	if m.enriching || len(m.snapshot.Quotes) != 1 {
+		t.Fatalf("enrichment was not applied: %#v", m)
 	}
 }
