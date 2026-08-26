@@ -248,6 +248,14 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	if key == "ctrl+c" {
 		return m, tea.Quit
 	}
+	if !m.commandMode && !m.searchEditing && key == "?" {
+		if m.screen == helpScreen {
+			m.screen = m.previous
+		} else {
+			m.previous, m.screen = m.screen, helpScreen
+		}
+		return m, nil
+	}
 	if m.commandMode {
 		m.commandMode = false
 		switch key {
@@ -260,12 +268,6 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			}
 			m.refreshing, m.notice = true, "새로고침 중"
 			return m, m.dashboardCmd()
-		case "?":
-			if m.screen == helpScreen {
-				m.screen = m.previous
-			} else {
-				m.previous, m.screen = m.screen, helpScreen
-			}
 		case "s":
 			if m.syncing {
 				m.notice = "이미 전체 동기화 중입니다"
@@ -677,10 +679,19 @@ func (m Model) currentSymbol() (domain.Symbol, bool) {
 }
 
 func (m Model) View() tea.View {
-	content := m.header() + "\n" + m.body() + "\n" + m.footer()
+	content := m.header() + "\n" + m.body()
+	if m.commandMode {
+		content += "\n\n" + m.commandPopup()
+	}
+	content += "\n" + m.footer()
 	v := tea.NewView(content)
 	v.AltScreen = true
 	return v
+}
+
+func (m Model) commandPopup() string {
+	commands := []string{":r  새로고침", ":s  종목·관심종목 동기화", ":d  연결 진단", ":q  종료", "Esc 팝업 닫기"}
+	return panel.Width(34).Render(brand.Render("콜론 명령") + "\n\n" + strings.Join(commands, "\n"))
 }
 
 var (
@@ -1121,7 +1132,7 @@ func (m Model) detailView() string {
 }
 
 func (m Model) helpView() string {
-	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\n←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지\ngt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n\n내 주식\nTab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동\n상세 차트\nh/l 또는 ←/→ 봉 단위 변경\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :? 도움말   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
+	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\n←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지\ngt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n? 도움말\n\n내 주식\nTab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동\n상세 차트\nh/l 또는 ←/→ 봉 단위 변경\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
 }
 
 func (m Model) diagnosticsView() string {
@@ -1150,7 +1161,7 @@ func (m Model) footer() string {
 	if m.commandMode {
 		return brand.Render(" COMMAND :")
 	}
-	base := " ↑↓/jk 이동  Enter 상세  / 검색  : 명령"
+	base := " ↑↓/jk 이동  Enter 상세  / 검색  : 명령  ? 도움말"
 	return muted.Render(base) + "  │  " + m.connectionIndicator()
 }
 
