@@ -398,6 +398,14 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "enter":
 		m.searchEditing = false
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down":
+		if m.cursor+1 < m.itemCount() {
+			m.cursor++
+		}
 	case "backspace":
 		if len(m.query) > 0 {
 			_, size := utf8.DecodeLastRuneInString(m.query)
@@ -671,15 +679,22 @@ func (m Model) portfolioView() string {
 		krTab = selected.Render(krTab)
 		usTab = muted.Render(usTab)
 	}
-	lines := []string{krTab + "  " + usTab + "   " + muted.Render("통화 "+m.currencyName()), ""}
 	visible := visiblePortfolioColumns(max(30, m.width-10), m.portfolioCol)
+	topLeft := krTab + "  " + usTab + "   " + muted.Render("통화 "+m.currencyName())
+	topRight := ""
 	if len(visible) > 0 {
 		last := visible[len(visible)-1] + 1
-		lines = append(lines, renderPortfolioHeader(visible), muted.Render(fmt.Sprintf("열 %d-%d/%d  ([/]: 열 이동)", visible[0]+1, last, len(portfolioColumns))))
+		topRight = muted.Render(fmt.Sprintf("열 %d-%d/%d  ([/]: 열 이동)", visible[0]+1, last, len(portfolioColumns)))
 	}
-	totalValue := decimal.Zero
+	lines := []string{joinPortfolioTop(topLeft, topRight, max(56, m.width-8)), ""}
+	if len(visible) > 0 {
+		lines = append(lines, renderPortfolioHeader(visible))
+	}
+	totalValue, totalPurchase, totalProfit := decimal.Zero, decimal.Zero, decimal.Zero
 	for _, p := range items {
 		totalValue = totalValue.Add(p.MarketValue)
+		totalPurchase = totalPurchase.Add(p.PurchaseValue)
+		totalProfit = totalProfit.Add(p.ProfitLoss)
 	}
 	for i, p := range items {
 		weight := decimal.Zero
@@ -694,10 +709,29 @@ func (m Model) portfolioView() string {
 		}
 		lines = append(lines, prefix+row)
 	}
+	if len(items) > 0 {
+		totalRate := decimal.Zero
+		if !totalPurchase.IsZero() {
+			totalRate = totalProfit.Div(totalPurchase).Mul(decimal.NewFromInt(100))
+		}
+		lines = append(lines, "  "+muted.Render(renderPortfolioSeparator(visible)))
+		lines = append(lines, "  "+m.renderPortfolioTotal(totalProfit, totalRate, items[0].Symbol.Currency, visible))
+	}
 	if len(items) == 0 {
 		lines = append(lines, "  보유 종목이 없습니다.")
 	}
 	return panel.Width(max(60, m.width-4)).Render(strings.Join(lines, "\n"))
+}
+
+func joinPortfolioTop(left, right string, width int) string {
+	if right == "" {
+		return left
+	}
+	padding := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if padding < 2 {
+		padding = 2
+	}
+	return left + strings.Repeat(" ", padding) + right
 }
 
 type portfolioColumn struct {
@@ -707,7 +741,7 @@ type portfolioColumn struct {
 }
 
 var portfolioColumns = []portfolioColumn{
-	{"종목명", 16, false}, {"평가손익", 17, true}, {"수익률", 9, true},
+	{"구분", 8, false}, {"종목명", 16, false}, {"평가손익", 17, true}, {"수익률", 9, true},
 	{"잔고수량", 12, true}, {"평가금액", 17, true}, {"매입가", 15, true},
 	{"현재가", 15, true}, {"매입금액", 17, true}, {"보유비중", 9, true},
 }
@@ -742,6 +776,7 @@ func renderPortfolioHeader(columns []int) string {
 
 func (m Model) renderPortfolioRow(p domain.Position, weight decimal.Decimal, columns []int) string {
 	values := []string{
+		brokerDisplayName(p.Broker),
 		p.Symbol.Name,
 		m.formatSignedAmount(p.ProfitLoss, p.Symbol.Currency),
 		signedPercent(p.ProfitRate),
@@ -756,12 +791,49 @@ func (m Model) renderPortfolioRow(p domain.Position, weight decimal.Decimal, col
 	for _, index := range columns {
 		column := portfolioColumns[index]
 		cell := fitCell(values[index], column.width, column.right)
-		if index == 1 || index == 2 {
+		if index == 2 || index == 3 {
 			cell = profitStyle(p.ProfitLoss).Render(cell)
 		}
 		cells = append(cells, cell)
 	}
 	return strings.Join(cells, " │ ")
+}
+
+func (m Model) renderPortfolioTotal(profit, rate decimal.Decimal, currency domain.Currency, columns []int) string {
+	values := []string{"", "합계", m.formatSignedAmount(profit, currency), signedPercent(rate), "", "", "", "", "", ""}
+	cells := make([]string, 0, len(columns))
+	for _, index := range columns {
+		column := portfolioColumns[index]
+		cell := fitCell(values[index], column.width, column.right)
+		if index == 2 || index == 3 {
+			cell = profitStyle(profit).Bold(true).Render(cell)
+		} else {
+			cell = brand.Render(cell)
+		}
+		cells = append(cells, cell)
+	}
+	return strings.Join(cells, " │ ")
+}
+
+func brokerDisplayName(broker domain.BrokerID) string {
+	switch broker {
+	case domain.BrokerKiwoom:
+		return "키움"
+	case domain.BrokerNH:
+		return "NH"
+	case domain.BrokerMock:
+		return "모의"
+	default:
+		return string(broker)
+	}
+}
+
+func renderPortfolioSeparator(columns []int) string {
+	parts := make([]string, 0, len(columns))
+	for _, index := range columns {
+		parts = append(parts, strings.Repeat("─", portfolioColumns[index].width))
+	}
+	return strings.Join(parts, "─┼─")
 }
 
 func portfolioTabName(tab marketFilter) string {
@@ -826,16 +898,60 @@ func (m Model) searchView() string {
 
 func (m Model) watchlistView() string {
 	items := m.filteredWatchlist()
-	lines := []string{"관심종목 [" + m.filterName() + "]", "", "   종목                 출처             현재가      등락률"}
+	lines := []string{"관심종목 [" + m.filterName() + "]", "", renderWatchlistHeader()}
 	for i, item := range items {
 		q := m.snapshot.Quotes[item.Symbol.Key()]
-		line := fmt.Sprintf("%-2s %-18s %-10s %16s %8s%%", cursor(i, m.cursor), trim(item.Symbol.Name, 16), item.Provider, m.formatAmount(q.Price, item.Symbol.Currency), q.ChangeRate.StringFixed(2))
-		lines = append(lines, selectLine(line, i == m.cursor))
+		line := m.renderWatchlistRow(item, q)
+		prefix := "  "
+		if i == m.cursor {
+			prefix = brand.Render("> ")
+			line = selectedRow.Render(line)
+		}
+		lines = append(lines, prefix+line)
 	}
 	if len(items) == 0 {
 		lines = append(lines, "  관심종목이 없습니다. 검색 결과에서 추후 로컬 관심종목으로 추가할 수 있습니다.")
 	}
 	return panel.Width(max(60, m.width-4)).Render(strings.Join(lines, "\n"))
+}
+
+var watchlistColumns = []portfolioColumn{
+	{"구분", 7, false}, {"종목명", 16, false}, {"종목코드", 10, false},
+	{"현재가", 15, true}, {"등락률", 10, true},
+}
+
+func renderWatchlistHeader() string {
+	cells := make([]string, 0, len(watchlistColumns))
+	for _, column := range watchlistColumns {
+		cells = append(cells, fitCell(column.title, column.width, column.right))
+	}
+	return "  " + muted.Render(strings.Join(cells, " │ "))
+}
+
+func (m Model) renderWatchlistRow(item domain.WatchlistItem, quote domain.Quote) string {
+	values := []string{
+		watchlistProviderName(item),
+		item.Symbol.Name,
+		item.Symbol.Code,
+		m.formatAmount(quote.Price, item.Symbol.Currency),
+		signedPercent(quote.ChangeRate),
+	}
+	cells := make([]string, 0, len(watchlistColumns))
+	for index, column := range watchlistColumns {
+		cell := fitCell(values[index], column.width, column.right)
+		if index == 4 {
+			cell = profitStyle(quote.ChangeRate).Render(cell)
+		}
+		cells = append(cells, cell)
+	}
+	return strings.Join(cells, " │ ")
+}
+
+func watchlistProviderName(item domain.WatchlistItem) string {
+	if item.Provider == domain.BrokerMock && strings.Contains(","+item.GroupID+",", ",default,") {
+		return "로컬"
+	}
+	return brokerDisplayName(item.Provider)
 }
 
 func (m Model) moversView() string {

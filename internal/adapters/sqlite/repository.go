@@ -108,7 +108,13 @@ CREATE TABLE IF NOT EXISTS broker_sync_state (
 	if err := r.ensureColumn(ctx, "watchlist_items", "exchange_code", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?),(2, ?)`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano))
+	// Older demo runs persisted MOCK/sample watchlists. Keep the user's local
+	// MOCK/default group, but remove provider-owned sample groups when upgrading.
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM watchlists WHERE provider=? AND group_id<>'default'`, domain.BrokerMock); err != nil {
+		return fmt.Errorf("remove legacy demo watchlists: %w", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?),(2, ?),(3, ?)`, now, now, now)
 	return err
 }
 

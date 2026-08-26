@@ -75,3 +75,31 @@ func TestUSExchangeRoundTrip(t *testing.T) {
 		t.Fatalf("watchlist exchange: %#v %v", items, err)
 	}
 }
+
+func TestMigrationRemovesDemoWatchlistButKeepsLocalItems(t *testing.T) {
+	ctx := context.Background()
+	repo, err := Open(filepath.Join(t.TempDir(), "minstock.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	if err := repo.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	local := domain.Symbol{Code: "005930", Name: "삼성전자", Market: domain.MarketKOSPI, Currency: domain.KRW}
+	if err := repo.AddLocalWatchlistItem(ctx, local); err != nil {
+		t.Fatal(err)
+	}
+	demoGroup := domain.WatchlistGroup{ID: "sample", ExternalID: "sample", Name: "샘플 관심종목", Provider: domain.BrokerMock}
+	demo := domain.WatchlistItem{GroupID: "sample", Provider: domain.BrokerMock, Symbol: domain.Symbol{Code: "000660", Name: "SK하이닉스", Market: domain.MarketKOSPI, Currency: domain.KRW}}
+	if err := repo.ReplaceWatchlistItems(ctx, demoGroup, []domain.WatchlistItem{demo}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	items, err := repo.ListWatchlist(ctx)
+	if err != nil || len(items) != 1 || items[0].Symbol.Code != local.Code || items[0].GroupID != "default" {
+		t.Fatalf("watchlist cleanup: %#v, %v", items, err)
+	}
+}
