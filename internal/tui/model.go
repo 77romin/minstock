@@ -330,7 +330,10 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		m.screen, m.cursor = dashboardScreen, 0
 	case "2":
 		m.screen, m.cursor = portfolioScreen, 0
-	case "3", "/":
+	case "3":
+		m.screen, m.cursor, m.searchEditing = searchScreen, 0, false
+		return m, m.searchCmd(m.query)
+	case "/":
 		m.screen, m.cursor, m.searchEditing = searchScreen, 0, true
 		return m, m.searchCmd(m.query)
 	case "4":
@@ -346,13 +349,21 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			m.filter = (m.filter + 1) % 3
 			m.cursor, m.notice = 0, "시장 필터: "+m.filterName()
 		}
-	case "tab", "right", "l":
+	case "tab":
 		if m.screen == portfolioScreen {
 			m.switchPortfolioTab(1)
 		}
-	case "shift+tab", "left", "h":
+	case "shift+tab":
 		if m.screen == portfolioScreen {
 			m.switchPortfolioTab(-1)
+		}
+	case "right", "l":
+		if m.screen >= dashboardScreen && m.screen <= moversScreen {
+			m.nextPrimaryScreen(1)
+		}
+	case "left", "h":
+		if m.screen >= dashboardScreen && m.screen <= moversScreen {
+			m.nextPrimaryScreen(-1)
 		}
 	case "]":
 		if m.screen == portfolioScreen && m.portfolioCol < len(portfolioColumns)-1 {
@@ -428,8 +439,22 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 	}
 	if !m.searchEditing {
 		switch key {
+		case "1":
+			m.screen, m.cursor = dashboardScreen, 0
+		case "2":
+			m.screen, m.cursor = portfolioScreen, 0
+		case "3":
+			m.cursor = 0
+		case "4":
+			m.screen, m.cursor = watchlistScreen, 0
+		case "5":
+			m.screen, m.cursor = moversScreen, 0
 		case "/":
 			m.searchEditing = true
+		case "left", "h":
+			m.nextPrimaryScreen(-1)
+		case "right", "l":
+			m.nextPrimaryScreen(1)
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
@@ -654,6 +679,9 @@ var (
 	selectedRow = lipgloss.NewStyle().Background(lipgloss.Color("236"))
 	positive    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	negative    = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	statusOK    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	statusWait  = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	statusDown  = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	panel       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Padding(0, 1)
 )
 
@@ -1078,7 +1106,7 @@ func (m Model) detailView() string {
 }
 
 func (m Model) helpView() string {
-	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\ngg/G 처음/끝        Ctrl+u/d 반 페이지  gt/gT 다음/이전 화면\n/ 검색              h/l 차트 봉 변경    m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n\n내 주식\nTab/Shift+Tab, h/l 한국·미국 탭    [/ ] 표 열 이동\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :? 도움말   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
+	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\n←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지\ngt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n\n내 주식\nTab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동\n상세 차트\nh/l 또는 ←/→ 봉 단위 변경\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :? 도움말   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
 }
 
 func (m Model) diagnosticsView() string {
@@ -1107,18 +1135,29 @@ func (m Model) footer() string {
 	if m.commandMode {
 		return brand.Render(" COMMAND :")
 	}
-	status := m.notice
-	if m.loading || m.refreshing || m.enriching || m.syncing {
-		if status != "" {
-			status += " · "
+	base := " ↑↓/jk 이동  Enter 상세  / 검색  : 명령"
+	return muted.Render(base) + "  │  " + m.connectionIndicator()
+}
+
+func (m Model) connectionIndicator() string {
+	if len(m.snapshot.Statuses) == 0 {
+		return statusDown.Render("● Not Connected")
+	}
+	connected, disconnected := 0, 0
+	for _, status := range m.snapshot.Statuses {
+		if status.Connected {
+			connected++
+		} else {
+			disconnected++
 		}
-		status += "갱신 중…"
 	}
-	base := " ↑↓/jk 선택  Enter 상세  / 검색  f 시장/보유탭  m 관심  : 명령"
-	if status != "" {
-		base += "  │  " + status
+	if connected == 0 {
+		return statusDown.Render("● Not Connected")
 	}
-	return muted.Render(base)
+	if disconnected > 0 || m.loading || m.refreshing || m.enriching || m.syncing {
+		return statusWait.Render("● Delayed")
+	}
+	return statusOK.Render("● Connected")
 }
 func money(v decimal.Decimal) string { return v.Round(0).StringFixed(0) }
 func signedMoney(v decimal.Decimal) string {

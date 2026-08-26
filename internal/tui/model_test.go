@@ -52,10 +52,57 @@ func TestVimNavigationAndPortfolioTabs(t *testing.T) {
 	if m.portfolioTab != filterUS || m.itemCount() != 1 || m.cursor != 0 {
 		t.Fatalf("US tab=%v count=%d cursor=%d", m.portfolioTab, m.itemCount(), m.cursor)
 	}
-	next, _ = m.handleKey("h")
+	next, _ = m.handleKey("shift+tab")
 	m = next.(Model)
 	if m.portfolioTab != filterKR || m.itemCount() != 2 {
 		t.Fatalf("KR tab=%v count=%d", m.portfolioTab, m.itemCount())
+	}
+}
+
+func TestSearchRequiresSlashToEnterEditMode(t *testing.T) {
+	m := Model{screen: dashboardScreen}
+	next, cmd := m.handleKey("3")
+	m = next.(Model)
+	if m.screen != searchScreen || m.searchEditing || cmd == nil {
+		t.Fatalf("3 must open search normal mode: screen=%v editing=%v cmd=%v", m.screen, m.searchEditing, cmd)
+	}
+	next, _ = m.handleKey("q")
+	m = next.(Model)
+	if m.query != "" {
+		t.Fatalf("normal-mode text changed query: %q", m.query)
+	}
+	next, _ = m.handleKey("/")
+	m = next.(Model)
+	if !m.searchEditing {
+		t.Fatal("/ must enter search edit mode")
+	}
+	next, _ = m.handleKey("q")
+	if next.(Model).query != "q" {
+		t.Fatalf("edit-mode text did not change query: %q", next.(Model).query)
+	}
+}
+
+func TestPrimaryScreensSupportHorizontalVimNavigation(t *testing.T) {
+	m := Model{screen: dashboardScreen, portfolioTab: filterKR}
+	next, _ := m.handleKey("right")
+	m = next.(Model)
+	if m.screen != portfolioScreen {
+		t.Fatalf("right screen=%v", m.screen)
+	}
+	next, _ = m.handleKey("l")
+	m = next.(Model)
+	if m.screen != searchScreen || m.searchEditing {
+		t.Fatalf("l screen=%v editing=%v", m.screen, m.searchEditing)
+	}
+	next, _ = m.handleKey("h")
+	m = next.(Model)
+	if m.screen != portfolioScreen {
+		t.Fatalf("h screen=%v", m.screen)
+	}
+	next, _ = m.handleKey("left")
+	m = next.(Model)
+	if m.screen != dashboardScreen {
+		t.Fatalf("left screen=%v", m.screen)
 	}
 }
 
@@ -251,5 +298,21 @@ func TestProgressiveDashboardMessagesPreferLiveData(t *testing.T) {
 	m = next.(Model)
 	if m.enriching || len(m.snapshot.Quotes) != 1 {
 		t.Fatalf("enrichment was not applied: %#v", m)
+	}
+}
+
+func TestConnectionIndicatorUsesThreeStates(t *testing.T) {
+	connected := Model{snapshot: app.Snapshot{Statuses: []domain.BrokerStatus{{Connected: true}}}}
+	if !strings.Contains(connected.footer(), "Connected") || !strings.Contains(connected.footer(), "●") {
+		t.Fatalf("connected footer: %q", connected.footer())
+	}
+	delayed := connected
+	delayed.enriching = true
+	if !strings.Contains(delayed.footer(), "Delayed") {
+		t.Fatalf("delayed footer: %q", delayed.footer())
+	}
+	notConnected := Model{snapshot: app.Snapshot{Statuses: []domain.BrokerStatus{{Connected: false}}}}
+	if !strings.Contains(notConnected.footer(), "Not Connected") {
+		t.Fatalf("not-connected footer: %q", notConnected.footer())
 	}
 }
