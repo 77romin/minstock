@@ -1,0 +1,18 @@
+# Build outputs
+/bin/
+/dist/
+/coverage.out
+
+# Local application state and secrets
+/.minstock/
+*.db
+*.db-shm
+*.db-wal
+.env
+*.log
+
+# Editors and OS files
+.DS_Store
+.idea/
+.vscode/
+

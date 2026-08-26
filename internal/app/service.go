@@ -1,0 +1,219 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/mink/stock-min-tui/internal/domain"
+	"github.com/mink/stock-min-tui/internal/ports"
+	"github.com/shopspring/decimal"
+)
+
+type Service struct {
+	repo        ports.Repository
+	providers   []ports.Provider
+	instruments []ports.InstrumentProvider
+	watchlists  []ports.WatchlistReader
+	fx          []ports.FXProvider
+}
+
+type Snapshot struct {
+	Balances  []domain.Balance
+	Positions []domain.Position
+	Watchlist []domain.WatchlistItem
+	Quotes    map[string]domain.Quote
+	Statuses  []domain.BrokerStatus
+	FX        domain.FXRate
+	Surges    []domain.SurgeReport
+	Warnings  []string
+	LoadedAt  time.Time
+}
+
+func New(repo ports.Repository, providers []ports.Provider, instruments []ports.InstrumentProvider, watchlists []ports.WatchlistReader, fx []ports.FXProvider) *Service {
+	return &Service{repo: repo, providers: providers, instruments: instruments, watchlists: watchlists, fx: fx}
+}
+
+func (s *Service) Sync(ctx context.Context) []error {
+	var errs []error
+	for i, source := range s.instruments {
+		symbols, err := source.Instruments(ctx)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("instruments: %w", err))
+			continue
+		}
+		provider := domain.BrokerMock
+		if i < len(s.providers) {
+			provider = s.providers[i].ID()
+		}
+		if err := s.repo.UpsertInstruments(ctx, symbols, provider); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for i, source := range s.watchlists {
+		groups, err := source.WatchlistGroups(ctx)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("watchlists: %w", err))
+			continue
+		}
+		for _, group := range groups {
+			items, err := source.WatchlistItems(ctx, group.ExternalID)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if i < len(s.providers) && group.Provider == "" {
+				group.Provider = s.providers[i].ID()
+			}
+			for j := range items {
+				if items[j].Provider == "" {
+					items[j].Provider = group.Provider
+				}
+				// Watchlist APIs often return only a code. Reuse the freshly synced
+				// instrument index to attach its canonical name and market.
+				if items[j].Symbol.Name == "" {
+					matches, searchErr := s.repo.SearchInstruments(ctx, items[j].Symbol.Code, 10)
+					if searchErr == nil {
+						for _, match := range matches {
+							if match.Code == items[j].Symbol.Code {
+								items[j].Symbol = match
+								break
+							}
+						}
+					}
+				}
+			}
+			if err := s.repo.ReplaceWatchlistItems(ctx, group, items); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errs
+}
+
+func (s *Service) Dashboard(ctx context.Context) Snapshot {
+	snap := Snapshot{Quotes: map[string]domain.Quote{}, LoadedAt: time.Now()}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, provider := range s.providers {
+		provider := provider
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			status := provider.Status(ctx)
+			mu.Lock()
+			snap.Statuses = append(snap.Statuses, status)
+			mu.Unlock()
+			if !status.Connected {
+				return
+			}
+			accounts, err := provider.Accounts(ctx)
+			if err != nil {
+				mu.Lock()
+				snap.Warnings = append(snap.Warnings, string(provider.ID())+": "+err.Error())
+				mu.Unlock()
+				return
+			}
+			for _, account := range accounts {
+				balance, err := provider.Balance(ctx, account.ID)
+				if err == nil {
+					mu.Lock()
+					snap.Balances = append(snap.Balances, balance)
+					mu.Unlock()
+				} else {
+					mu.Lock()
+					snap.Warnings = append(snap.Warnings, err.Error())
+					mu.Unlock()
+				}
+				positions, err := provider.Positions(ctx, account.ID)
+				if err == nil {
+					mu.Lock()
+					snap.Positions = append(snap.Positions, positions...)
+					mu.Unlock()
+				} else {
+					mu.Lock()
+					snap.Warnings = append(snap.Warnings, err.Error())
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	items, err := s.repo.ListWatchlist(ctx)
+	if err == nil {
+		snap.Watchlist = items
+	} else {
+		snap.Warnings = append(snap.Warnings, err.Error())
+	}
+	seen := map[string]domain.Symbol{}
+	for _, position := range snap.Positions {
+		seen[position.Symbol.Key()] = position.Symbol
+	}
+	for _, item := range snap.Watchlist {
+		seen[item.Symbol.Key()] = item.Symbol
+	}
+	for _, symbol := range seen {
+		q, err := s.Quote(ctx, symbol)
+		if err != nil {
+			continue
+		}
+		snap.Quotes[symbol.Key()] = q
+		report, ok := domain.ScoreSurge(q, decimal.NewFromFloat(2.8), decimal.NewFromFloat(3.2), domain.DefaultSurgePolicy())
+		if ok {
+			snap.Surges = append(snap.Surges, report)
+		}
+	}
+	sort.Slice(snap.Surges, func(i, j int) bool { return snap.Surges[i].Score > snap.Surges[j].Score })
+	for _, source := range s.fx {
+		rate, err := source.USDKRW(ctx)
+		if err == nil {
+			snap.FX = rate
+			break
+		}
+	}
+	return snap
+}
+
+func (s *Service) Quote(ctx context.Context, symbol domain.Symbol) (domain.Quote, error) {
+	var errs []error
+	for _, provider := range s.providers {
+		q, err := provider.Quote(ctx, symbol)
+		if err == nil {
+			return q, nil
+		}
+		errs = append(errs, err)
+	}
+	return domain.Quote{}, errors.Join(errs...)
+}
+func (s *Service) Candles(ctx context.Context, q domain.CandleQuery) ([]domain.Candle, error) {
+	cached, _ := s.repo.LoadCandles(ctx, q)
+	if len(cached) >= q.Limit && q.Limit > 0 {
+		return cached, nil
+	}
+	var errs []error
+	for _, provider := range s.providers {
+		candles, err := provider.Candles(ctx, q)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		_ = s.repo.SaveCandles(ctx, candles)
+		return candles, nil
+	}
+	if len(cached) > 0 {
+		return cached, nil
+	}
+	return nil, errors.Join(errs...)
+}
+func (s *Service) Search(ctx context.Context, query string) ([]domain.Symbol, error) {
+	return s.repo.SearchInstruments(ctx, query, 40)
+}
+func (s *Service) AddWatchlist(ctx context.Context, symbol domain.Symbol) error {
+	return s.repo.AddLocalWatchlistItem(ctx, symbol)
+}
+func (s *Service) RemoveWatchlist(ctx context.Context, symbol domain.Symbol) error {
+	return s.repo.RemoveLocalWatchlistItem(ctx, symbol)
+}

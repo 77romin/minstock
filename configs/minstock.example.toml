@@ -1,0 +1,24 @@
+# minstock configuration. Secrets should be supplied by environment variables.
+# Copy this file to the path printed by `minstock --diagnose`.
+
+[app]
+refresh_interval = "5s"
+theme = "auto"
+
+[kiwoom]
+enabled = false
+mode = "mock" # mock | live
+base_url = "https://mockapi.kiwoom.com"
+
+[nh]
+enabled = false
+mode = "mock" # mock | live
+base_url = "https://moapi.nhplug.com:8443"
+auth_url = "https://api.nhplug.com:8443"
+
+[scanner]
+min_change_rate = "5"
+min_five_minute_rate = "2"
+min_volume_ratio = "2"
+min_turnover_krw = 3000000000
+
