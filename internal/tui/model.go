@@ -183,6 +183,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.syncCmd()
 		}
 	case dashboardMsg:
+		// DashboardCore intentionally returns before quote enrichment. Keep the
+		// last successful quotes while the next request is in flight; a transient
+		// API delay must not render watchlist prices as zero.
+		if msg.snapshot.Quotes == nil {
+			msg.snapshot.Quotes = map[string]domain.Quote{}
+		}
+		for key, quote := range m.snapshot.Quotes {
+			if _, ok := msg.snapshot.Quotes[key]; !ok {
+				msg.snapshot.Quotes[key] = quote
+			}
+		}
 		m.snapshot, m.loading, m.err = msg.snapshot, false, nil
 		m.refreshing, m.enriching, m.liveLoaded = false, true, true
 		m.notice = "계좌 갱신 완료 · 시세 보강 중"
@@ -992,8 +1003,8 @@ func (m Model) searchView() string {
 }
 
 var searchColumns = []portfolioColumn{
-	{"종목명", 20, false}, {"종목코드", 12, false}, {"시장", 10, false},
-	{"거래소", 10, false}, {"통화", 7, false},
+	{"티커", 14, false}, {"종목명", 18, false}, {"종목코드", 12, false},
+	{"시장", 10, false}, {"거래소", 10, false}, {"통화", 7, false},
 }
 
 func renderSearchHeader() string {
@@ -1009,7 +1020,11 @@ func renderSearchRow(symbol domain.Symbol) string {
 	if exchange == "" {
 		exchange = "-"
 	}
-	values := []string{symbol.Name, symbol.Code, string(symbol.Market), exchange, string(symbol.Currency)}
+	ticker := symbol.Ticker
+	if ticker == "" {
+		ticker = symbol.Code
+	}
+	values := []string{ticker, symbol.Name, symbol.Code, string(symbol.Market), exchange, string(symbol.Currency)}
 	cells := make([]string, 0, len(searchColumns))
 	for index, column := range searchColumns {
 		cells = append(cells, fitCell(values[index], column.width, column.right))
@@ -1154,7 +1169,9 @@ func (m Model) connectionIndicator() string {
 	if connected == 0 {
 		return statusDown.Render("● Not Connected")
 	}
-	if disconnected > 0 || m.loading || m.refreshing || m.enriching || m.syncing {
+	// An in-flight request is not itself a delay. Only mark stale data after
+	// the refresh window has elapsed since the last successful snapshot.
+	if !m.snapshot.LoadedAt.IsZero() && time.Since(m.snapshot.LoadedAt) > m.refreshEvery {
 		return statusWait.Render("● Delayed")
 	}
 	return statusOK.Render("● Connected")

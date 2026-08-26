@@ -41,6 +41,7 @@ var readOnlyAPIs = map[string]string{
 	"ka10083":  "/api/dostk/chart",
 	"ka10094":  "/api/dostk/chart",
 	"usa20100": "/api/us/mrkcond",
+	"usa10099": "/api/us/stkinfo",
 	"ust21070": "/api/us/acnt",
 	"ust21110": "/api/us/acnt",
 	"usa06010": "/api/us/chart",
@@ -271,7 +272,7 @@ func (c *Client) Positions(ctx context.Context, accountID string) ([]domain.Posi
 	positions := make([]domain.Position, 0, len(out.Positions))
 	for _, p := range out.Positions {
 		code := strings.TrimPrefix(strings.TrimSpace(p.Code), "A")
-		positions = append(positions, domain.Position{AccountID: accountID, Broker: c.ID(), Symbol: domain.Symbol{Code: code, Name: p.Name, Market: domain.MarketKRX, Currency: domain.KRW}, Quantity: num(p.Quantity), Tradable: num(p.Tradable), AveragePrice: num(p.Average), CurrentPrice: num(p.Price), PurchaseValue: num(p.Purchase), MarketValue: num(p.Value), ProfitLoss: signed(p.Profit), ProfitRate: signed(p.Rate), AsOf: time.Now()})
+		positions = append(positions, domain.Position{AccountID: accountID, Broker: c.ID(), Symbol: domain.Symbol{Code: code, Ticker: code, Name: p.Name, Market: domain.MarketKRX, Currency: domain.KRW}, Quantity: num(p.Quantity), Tradable: num(p.Tradable), AveragePrice: num(p.Average), CurrentPrice: num(p.Price), PurchaseValue: num(p.Purchase), MarketValue: num(p.Value), ProfitLoss: signed(p.Profit), ProfitRate: signed(p.Rate), AsOf: time.Now()})
 	}
 	return positions, nil
 }
@@ -342,7 +343,8 @@ func (c *Client) usPositions(ctx context.Context, accountID string) ([]domain.Po
 		if p.Currency != "" && !strings.EqualFold(p.Currency, "USD") {
 			continue // v0.1 overseas portfolio scope is US stocks only.
 		}
-		symbol := domain.Symbol{Code: strings.TrimSpace(p.Code), Name: strings.TrimSpace(p.Name), Market: domain.MarketUS, Currency: currency, Exchange: normalizeUSExchange(p.Exchange)}
+		code := strings.TrimSpace(p.Code)
+		symbol := domain.Symbol{Code: code, Ticker: code, Name: strings.TrimSpace(p.Name), Market: domain.MarketUS, Currency: currency, Exchange: normalizeUSExchange(p.Exchange)}
 		positions = append(positions, domain.Position{AccountID: accountID, Broker: c.ID(), Symbol: symbol, Quantity: num(p.Quantity), Tradable: num(p.Tradable), AveragePrice: num(p.Average), CurrentPrice: num(p.Price), PurchaseValue: num(p.Purchase), MarketValue: num(p.Value), ProfitLoss: signed(p.Profit), ProfitRate: signed(p.Rate), AsOf: time.Now()})
 	}
 	return positions, nil
@@ -463,7 +465,31 @@ func (c *Client) Instruments(ctx context.Context) ([]domain.Symbol, error) {
 				return nil, err
 			}
 			for _, s := range out.List {
-				result = append(result, domain.Symbol{Code: s.Code, Name: s.Name, Market: m.market, Currency: domain.KRW})
+				result = append(result, domain.Symbol{Code: s.Code, Ticker: s.Code, Name: s.Name, Market: m.market, Currency: domain.KRW})
+			}
+			if !strings.EqualFold(continuation, "Y") || nextKey == "" {
+				break
+			}
+		}
+	}
+	// Kiwoom exposes the US master through usa10099. It is intentionally
+	// fetched only from an explicit sync (Service.Sync), never on startup.
+	for _, exchange := range []string{"ND", "NY", "NA"} {
+		continuation, nextKey := "", ""
+		for {
+			var raw map[string]json.RawMessage
+			var err error
+			continuation, nextKey, err = c.callPage(ctx, "usa10099", "/api/us/stkinfo", map[string]string{"stex_tp": exchange}, &raw, continuation, nextKey)
+			if err != nil {
+				return nil, err
+			}
+			for _, item := range parseUSInstrumentItems(raw) {
+				code := strings.TrimSpace(firstString(item, "stk_cd", "code", "symbol", "ticker"))
+				name := strings.TrimSpace(firstString(item, "stk_nm", "name", "display_name"))
+				if code == "" {
+					continue
+				}
+				result = append(result, domain.Symbol{Code: code, Ticker: code, Name: name, Market: domain.MarketUS, Currency: domain.USD, Exchange: exchange})
 			}
 			if !strings.EqualFold(continuation, "Y") || nextKey == "" {
 				break
@@ -471,6 +497,73 @@ func (c *Client) Instruments(ctx context.Context) ([]domain.Symbol, error) {
 		}
 	}
 	return result, nil
+}
+
+// parseUSInstrumentItems accepts the current API envelope (us_stklist) and
+// a few historical aliases so a server-side field rename does not silently
+// remove every US result from local search.
+func parseUSInstrumentItems(raw map[string]json.RawMessage) []map[string]any {
+	for _, key := range []string{"us_stklist", "result_list", "list", "items", "stk_list"} {
+		if b, ok := raw[key]; ok {
+			var items []map[string]any
+			if json.Unmarshal(b, &items) == nil {
+				return items
+			}
+		}
+	}
+	// Be tolerant of an envelope rename: locate the first array containing
+	// objects with a stock-code field anywhere in the response tree.
+	for _, value := range raw {
+		var node any
+		if json.Unmarshal(value, &node) == nil {
+			if items := findUSInstrumentArray(node); len(items) > 0 {
+				return items
+			}
+		}
+	}
+	return nil
+}
+
+func findUSInstrumentArray(node any) []map[string]any {
+	switch value := node.(type) {
+	case []any:
+		items := make([]map[string]any, 0, len(value))
+		for _, child := range value {
+			item, ok := child.(map[string]any)
+			if !ok {
+				continue
+			}
+			if firstString(item, "stk_cd", "code", "symbol", "ticker") != "" {
+				items = append(items, item)
+			}
+		}
+		if len(items) > 0 {
+			return items
+		}
+		for _, child := range value {
+			if items := findUSInstrumentArray(child); len(items) > 0 {
+				return items
+			}
+		}
+	case map[string]any:
+		for _, child := range value {
+			if items := findUSInstrumentArray(child); len(items) > 0 {
+				return items
+			}
+		}
+	}
+	return nil
+}
+
+func firstString(item map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := item[key]; ok {
+			if s, ok := value.(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 func (c *Client) WatchlistGroups(ctx context.Context) ([]domain.WatchlistGroup, error) {

@@ -59,19 +59,19 @@ func TestUSExchangeRoundTrip(t *testing.T) {
 	if err := repo.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	symbol := domain.Symbol{Code: "AAPL", Name: "Apple", Market: domain.MarketUS, Currency: domain.USD, Exchange: "ND"}
+	symbol := domain.Symbol{Code: "US-AAPL", Ticker: "AAPL", Name: "Apple", Market: domain.MarketUS, Currency: domain.USD, Exchange: "ND"}
 	if err := repo.UpsertInstruments(ctx, []domain.Symbol{symbol}, domain.BrokerKiwoom); err != nil {
 		t.Fatal(err)
 	}
 	results, err := repo.SearchInstruments(ctx, "AAPL", 10)
-	if err != nil || len(results) != 1 || results[0].Exchange != "ND" {
+	if err != nil || len(results) != 1 || results[0].Ticker != "AAPL" || results[0].Exchange != "ND" {
 		t.Fatalf("search exchange: %#v %v", results, err)
 	}
 	if err := repo.AddLocalWatchlistItem(ctx, symbol); err != nil {
 		t.Fatal(err)
 	}
 	items, err := repo.ListWatchlist(ctx)
-	if err != nil || len(items) != 1 || items[0].Symbol.Exchange != "ND" {
+	if err != nil || len(items) != 1 || items[0].Symbol.Ticker != "AAPL" || items[0].Symbol.Exchange != "ND" {
 		t.Fatalf("watchlist exchange: %#v %v", items, err)
 	}
 }

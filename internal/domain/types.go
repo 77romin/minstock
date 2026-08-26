@@ -45,7 +45,10 @@ const (
 )
 
 type Symbol struct {
-	Code     string
+	Code string
+	// Ticker is the exchange-facing short symbol (for example AAPL). For
+	// domestic instruments it commonly falls back to Code.
+	Ticker   string
 	Name     string
 	Market   Market
 	Currency Currency

@@ -23,12 +23,16 @@ func TestInstrumentsFollowsContinuation(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"token": "test-token", "expires_dt": "20991231235959", "return_code": 0})
 			return
 		}
-		if r.Header.Get("authorization") != "Bearer test-token" || r.Header.Get("api-id") != "ka10099" {
+		if r.Header.Get("authorization") != "Bearer test-token" || (r.Header.Get("api-id") != "ka10099" && r.Header.Get("api-id") != "usa10099") {
 			t.Fatalf("unexpected headers: %#v", r.Header)
 		}
 		var body map[string]string
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		code := body["mrkt_tp"]
+		if r.Header.Get("api-id") == "usa10099" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"us_stklist": []map[string]string{{"stk_cd": body["stex_tp"] + "-AAPL", "stk_nm": "Apple"}}, "return_code": 0})
+			return
+		}
 		mu.Lock()
 		calls[code]++
 		call := calls[code]
@@ -49,11 +53,14 @@ func TestInstrumentsFollowsContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(symbols) != 6 {
-		t.Fatalf("got %d instruments, want 6", len(symbols))
+	if len(symbols) != 9 {
+		t.Fatalf("got %d instruments, want 9", len(symbols))
 	}
 	if symbols[0].Market != domain.MarketKOSPI || symbols[3].Market != domain.MarketETF {
 		t.Fatalf("unexpected market mapping: %#v", symbols)
+	}
+	if symbols[len(symbols)-1].Market != domain.MarketUS || symbols[len(symbols)-1].Ticker == "" {
+		t.Fatalf("US instruments were not mapped: %#v", symbols[len(symbols)-3:])
 	}
 }
 

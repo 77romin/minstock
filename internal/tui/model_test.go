@@ -257,12 +257,12 @@ func TestSearchViewRendersAlignedTable(t *testing.T) {
 	us := domain.Symbol{Code: "AAPL", Name: "Apple", Market: domain.MarketUS, Currency: domain.USD, Exchange: "ND"}
 	m := Model{screen: searchScreen, width: 100, results: []domain.Symbol{kr, us}}
 	view := m.searchView()
-	for _, header := range []string{"종목명", "종목코드", "시장", "거래소", "통화"} {
+	for _, header := range []string{"티커", "종목명", "종목코드", "시장", "거래소", "통화"} {
 		if !strings.Contains(view, header) {
 			t.Fatalf("missing search column %q: %q", header, view)
 		}
 	}
-	for _, value := range []string{"삼성전자", "005930", "Apple", "AAPL", "ND", "USD"} {
+	for _, value := range []string{"005930", "삼성전자", "Apple", "AAPL", "ND", "USD"} {
 		if !strings.Contains(view, value) {
 			t.Fatalf("missing search value %q: %q", value, view)
 		}
@@ -301,13 +301,23 @@ func TestProgressiveDashboardMessagesPreferLiveData(t *testing.T) {
 	}
 }
 
+func TestDashboardRefreshKeepsLastQuoteUntilEnrichment(t *testing.T) {
+	previous := domain.Quote{Price: decimal.NewFromInt(123), ChangeRate: decimal.NewFromInt(2)}
+	m := Model{snapshot: app.Snapshot{Quotes: map[string]domain.Quote{"US:AAPL": previous}}, refreshEvery: 5 * time.Second}
+	next, _ := m.Update(dashboardMsg{snapshot: app.Snapshot{LoadedAt: time.Now()}})
+	got := next.(Model).snapshot.Quotes["US:AAPL"]
+	if !got.Price.Equal(previous.Price) || !got.ChangeRate.Equal(previous.ChangeRate) {
+		t.Fatalf("last quote was cleared during refresh: %#v", got)
+	}
+}
+
 func TestConnectionIndicatorUsesThreeStates(t *testing.T) {
-	connected := Model{snapshot: app.Snapshot{Statuses: []domain.BrokerStatus{{Connected: true}}}}
+	connected := Model{snapshot: app.Snapshot{Statuses: []domain.BrokerStatus{{Connected: true}}, LoadedAt: time.Now()}, refreshEvery: 5 * time.Second}
 	if !strings.Contains(connected.footer(), "Connected") || !strings.Contains(connected.footer(), "●") {
 		t.Fatalf("connected footer: %q", connected.footer())
 	}
 	delayed := connected
-	delayed.enriching = true
+	delayed.snapshot.LoadedAt = time.Now().Add(-6 * time.Second)
 	if !strings.Contains(delayed.footer(), "Delayed") {
 		t.Fatalf("delayed footer: %q", delayed.footer())
 	}

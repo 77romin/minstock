@@ -218,7 +218,8 @@ func (c *Client) Positions(ctx context.Context, accountID string) ([]domain.Posi
 	}
 	positions := make([]domain.Position, 0, len(out.Positions))
 	for _, p := range out.Positions {
-		symbol := domain.Symbol{Code: first(p, "iem_cd", "pdno", "stck_shrn_iscd"), Name: first(p, "iem_nm", "prdt_name"), Market: domain.MarketKRX, Currency: domain.KRW}
+		code := first(p, "iem_cd", "pdno", "stck_shrn_iscd")
+		symbol := domain.Symbol{Code: code, Ticker: code, Name: first(p, "iem_nm", "prdt_name"), Market: domain.MarketKRX, Currency: domain.KRW}
 		positions = append(positions, domain.Position{AccountID: accountID, Broker: c.ID(), Symbol: symbol, Quantity: decAny(p, "hldg_qty", "hold_qty"), Tradable: decAny(p, "ord_psbl_qty", "sell_psbl_qty"), AveragePrice: decAny(p, "pchs_avg_pric", "pchs_avg_prc"), CurrentPrice: decAny(p, "stck_prpr", "prpr"), PurchaseValue: decAny(p, "pchs_amt", "buy_amt"), MarketValue: decAny(p, "evlu_amt", "evlu_pfls_amt"), ProfitLoss: decAnySigned(p, "evlu_pfls_amt", "evlu_pfls"), ProfitRate: decAnySigned(p, "evlu_pfls_rt", "evlu_erng_rt"), AsOf: time.Now()})
 	}
 	return positions, nil
