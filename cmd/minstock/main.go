@@ -29,11 +29,28 @@ func main() {
 
 func run(args []string) error {
 	flags := flag.NewFlagSet("minstock", flag.ContinueOnError)
+	flags.SetOutput(os.Stdout)
+	flags.Usage = printUsage
 	configPath := flags.String("config", "", "설정 파일 경로")
 	diagnose := flags.Bool("diagnose", false, "설정 및 연결 준비 상태 진단")
 	showVersion := flags.Bool("version", false, "버전 출력")
+	setupFlag := flags.Bool("setup", false, "store broker credentials in the OS keychain")
+	kiwoomFlag := flags.Bool("kiwoom", false, "select Kiwoom for --setup")
+	nhFlag := flags.Bool("nh", false, "select NH for --setup")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
+	}
+	if *setupFlag {
+		if *kiwoomFlag == *nhFlag {
+			return errors.New("--setup requires exactly one broker flag: --kiwoom or --nh")
+		}
+		if *kiwoomFlag {
+			return setup("kiwoom")
+		}
+		return setup("nh")
 	}
 	if *showVersion {
 		fmt.Println("minstock", version)
@@ -130,13 +147,21 @@ func printDiagnosis(cfg config.Config) error {
 }
 
 func printUsage() {
-	fmt.Println(`minstock - 터미널 주식 관리 프로그램
+	fmt.Println(`minstock - terminal stock portfolio viewer (read-only)
 
-사용법:
-  minstock                         TUI 실행
-  minstock sync                    종목/관심종목 동기화
-  minstock setup <kiwoom|nh>       API 키를 OS 키링에 저장
-  minstock --diagnose              설정 상태 확인
-  minstock --config <path>         별도 설정 파일 사용
-  minstock --version               버전 출력`)
+Usage:
+  minstock                         Start the TUI
+  minstock sync                    Sync instrument and watchlist data
+  minstock setup <kiwoom|nh>       Store API credentials in the OS keychain
+  minstock --setup --kiwoom        Same as "minstock setup kiwoom"
+  minstock --setup --nh            Same as "minstock setup nh"
+  minstock --diagnose              Check configuration and credential status
+  minstock --config <path>         Use an alternate configuration file
+  minstock --version               Print the version
+  minstock --help, -h              Show this help
+
+Options:
+  --setup --kiwoom|--nh             Select a broker when using --setup
+
+This program is read-only. Order APIs are not enabled.`)
 }

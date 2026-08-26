@@ -39,8 +39,7 @@ const (
 type currencyDisplay int
 
 const (
-	currencyBoth currencyDisplay = iota
-	currencyNative
+	currencyNative currencyDisplay = iota
 	currencyKRW
 )
 
@@ -68,6 +67,7 @@ type Model struct {
 	filter        marketFilter
 	portfolioTab  marketFilter
 	portfolioCol  int
+	portfolioSort int
 	currency      currencyDisplay
 	commandMode   bool
 	pendingG      bool
@@ -259,7 +259,7 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	if m.commandMode {
 		m.commandMode = false
 		switch key {
-		case "q":
+		case "q", "ㅂ":
 			return m, tea.Quit
 		case "r":
 			if m.refreshing || m.enriching || m.syncing {
@@ -386,8 +386,13 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		if m.screen == portfolioScreen && m.portfolioCol > 0 {
 			m.portfolioCol--
 		}
+	case "t":
+		if m.screen == portfolioScreen {
+			m.portfolioSort = (m.portfolioSort + 1) % 3
+			m.cursor = 0
+		}
 	case "c":
-		m.currency = (m.currency + 1) % 3
+		m.currency = (m.currency + 1) % 2
 		m.notice = "통화 표시: " + m.currencyName()
 	case "up", "k":
 		if m.cursor > 0 {
@@ -580,6 +585,18 @@ func (m Model) filteredPositions() []domain.Position {
 			result = append(result, p)
 		}
 	}
+	sort.SliceStable(result, func(i, j int) bool {
+		switch m.portfolioSort {
+		case 0:
+			return result[i].ProfitLoss.GreaterThan(result[j].ProfitLoss)
+		case 1:
+			return result[i].ProfitRate.GreaterThan(result[j].ProfitRate)
+		case 2:
+			// Within one market tab, weight has the same ordering as value.
+			return result[i].MarketValue.GreaterThan(result[j].MarketValue)
+		}
+		return false
+	})
 	return result
 }
 
@@ -627,11 +644,11 @@ func (m Model) filterName() string {
 func (m Model) currencyName() string {
 	switch m.currency {
 	case currencyNative:
-		return "원통화"
+		return "$ / ₩"
 	case currencyKRW:
-		return "원화"
+		return "₩"
 	default:
-		return "원통화+원화"
+		return "$ / ₩"
 	}
 }
 
@@ -704,11 +721,28 @@ var (
 	statusOK    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	statusWait  = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
 	statusDown  = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	activeTab   = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("86"))
+	sortHeader  = lipgloss.NewStyle().Underline(true)
 	panel       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Padding(0, 1)
 )
 
 func (m Model) header() string {
-	tabs := []string{"1 현황", "2 내 주식", "3 검색", "4 관심", "5 급등 분석"}
+	labels := []string{"1 현황", "2 내 주식", "3 검색", "4 관심", "5 급등 분석"}
+	active := m.screen
+	if active == detailScreen || active == helpScreen || active == diagnosticsScreen {
+		active = m.previous
+	}
+	if active < dashboardScreen || active > moversScreen {
+		active = dashboardScreen
+	}
+	tabs := make([]string, len(labels))
+	for i, label := range labels {
+		if screen(i) == active {
+			tabs[i] = activeTab.Render(label)
+		} else {
+			tabs[i] = label
+		}
+	}
 	return brand.Render(" MINSTOCK ") + "  " + strings.Join(tabs, "  ") + "  " + muted.Render("["+m.mode+"]")
 }
 
@@ -792,15 +826,10 @@ func (m Model) portfolioView() string {
 		usTab = muted.Render(usTab)
 	}
 	visible := visiblePortfolioColumns(max(30, m.width-10), m.portfolioCol)
-	topLeft := krTab + "  " + usTab + "   " + muted.Render("통화 "+m.currencyName())
-	topRight := ""
+	top := krTab + "  " + usTab + "   " + muted.Render("t: 정렬  c: ₩/$")
+	lines := []string{top, ""}
 	if len(visible) > 0 {
-		last := visible[len(visible)-1] + 1
-		topRight = muted.Render(fmt.Sprintf("열 %d-%d/%d  ([/]: 열 이동)", visible[0]+1, last, len(portfolioColumns)))
-	}
-	lines := []string{joinPortfolioTop(topLeft, topRight, max(56, m.width-8)), ""}
-	if len(visible) > 0 {
-		lines = append(lines, renderPortfolioHeader(visible))
+		lines = append(lines, m.renderPortfolioHeader(visible))
 	}
 	totalValue, totalPurchase, totalProfit := decimal.Zero, decimal.Zero, decimal.Zero
 	for _, p := range items {
@@ -854,8 +883,8 @@ type portfolioColumn struct {
 
 var portfolioColumns = []portfolioColumn{
 	{"구분", 8, false}, {"종목명", 16, false}, {"평가손익", 17, true}, {"수익률", 9, true},
-	{"잔고수량", 12, true}, {"평가금액", 17, true}, {"매입가", 15, true},
-	{"현재가", 15, true}, {"매입금액", 17, true}, {"보유비중", 9, true},
+	{"보유비중", 9, true}, {"보유금액", 17, true}, {"보유주식수", 12, true}, {"잔고수량", 12, true},
+	{"평가금액", 17, true}, {"매입가", 15, true}, {"현재가", 15, true}, {"매입금액", 17, true},
 }
 
 func visiblePortfolioColumns(width, start int) []int {
@@ -877,11 +906,15 @@ func visiblePortfolioColumns(width, start int) []int {
 	return result
 }
 
-func renderPortfolioHeader(columns []int) string {
+func (m Model) renderPortfolioHeader(columns []int) string {
 	cells := make([]string, 0, len(columns))
 	for _, index := range columns {
 		column := portfolioColumns[index]
-		cells = append(cells, fitCell(column.title, column.width, column.right))
+		cell := fitCell(column.title, column.width, column.right)
+		if (m.portfolioSort == 0 && index == 2) || (m.portfolioSort == 1 && index == 3) || (m.portfolioSort == 2 && index == 4) {
+			cell = sortHeader.Render(cell)
+		}
+		cells = append(cells, cell)
 	}
 	return "  " + muted.Render(strings.Join(cells, " │ "))
 }
@@ -892,12 +925,14 @@ func (m Model) renderPortfolioRow(p domain.Position, weight decimal.Decimal, col
 		p.Symbol.Name,
 		m.formatSignedAmount(p.ProfitLoss, p.Symbol.Currency),
 		signedPercent(p.ProfitRate),
-		p.Quantity.String(),
+		weight.StringFixed(2) + "%",
+		m.formatAmount(p.MarketValue, p.Symbol.Currency),
+		commaNumber(p.Quantity.String()),
+		commaNumber(p.Quantity.String()),
 		m.formatAmount(p.MarketValue, p.Symbol.Currency),
 		m.formatAmount(p.AveragePrice, p.Symbol.Currency),
 		m.formatAmount(p.CurrentPrice, p.Symbol.Currency),
 		m.formatAmount(p.PurchaseValue, p.Symbol.Currency),
-		weight.StringFixed(2) + "%",
 	}
 	cells := make([]string, 0, len(columns))
 	for _, index := range columns {
@@ -912,7 +947,7 @@ func (m Model) renderPortfolioRow(p domain.Position, weight decimal.Decimal, col
 }
 
 func (m Model) renderPortfolioTotal(profit, rate decimal.Decimal, currency domain.Currency, columns []int) string {
-	values := []string{"", "합계", m.formatSignedAmount(profit, currency), signedPercent(rate), "", "", "", "", "", ""}
+	values := []string{"", "합계", m.formatSignedAmount(profit, currency), signedPercent(rate), "", "", "", "", "", "", "", ""}
 	cells := make([]string, 0, len(columns))
 	for _, index := range columns {
 		column := portfolioColumns[index]
@@ -1132,7 +1167,7 @@ func (m Model) detailView() string {
 }
 
 func (m Model) helpView() string {
-	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\n←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지\ngt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n? 도움말\n\n내 주식\nTab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동\n상세 차트\nh/l 또는 ←/→ 봉 단위 변경\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
+	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\n←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지\ngt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n? 도움말\n\n내 주식\nTab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동\nt 기본순서→수익률→보유비중 정렬\n상세 차트\nh/l 또는 ←/→ 봉 단위 변경\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
 }
 
 func (m Model) diagnosticsView() string {
@@ -1187,7 +1222,24 @@ func (m Model) connectionIndicator() string {
 	}
 	return statusOK.Render("● Connected")
 }
-func money(v decimal.Decimal) string { return v.Round(0).StringFixed(0) }
+func money(v decimal.Decimal) string { return commaNumber(v.Round(0).StringFixed(0)) }
+
+func commaNumber(value string) string {
+	value = strings.TrimSpace(value)
+	sign := ""
+	if strings.HasPrefix(value, "-") || strings.HasPrefix(value, "+") {
+		sign, value = value[:1], value[1:]
+	}
+	parts := strings.SplitN(value, ".", 2)
+	integer := parts[0]
+	for i := len(integer) - 3; i > 0; i -= 3 {
+		integer = integer[:i] + "," + integer[i:]
+	}
+	if len(parts) == 2 {
+		return sign + integer + "." + parts[1]
+	}
+	return sign + integer
+}
 func signedMoney(v decimal.Decimal) string {
 	if v.IsPositive() {
 		return "+" + money(v)
@@ -1196,10 +1248,10 @@ func signedMoney(v decimal.Decimal) string {
 }
 func signedUSD(v decimal.Decimal) string {
 	if v.IsPositive() {
-		return "+$" + v.StringFixed(2)
+		return "+$" + commaNumber(v.StringFixed(2))
 	}
 	if v.IsNegative() {
-		return "-$" + v.Abs().StringFixed(2)
+		return "-$" + commaNumber(v.Abs().StringFixed(2))
 	}
 	return "$0.00"
 }
@@ -1207,7 +1259,7 @@ func (m Model) formatAmount(v decimal.Decimal, currency domain.Currency) string 
 	if currency != domain.USD {
 		return "₩" + money(v)
 	}
-	usd := "$" + v.StringFixed(2)
+	usd := "$" + commaNumber(v.StringFixed(2))
 	krw := "₩-"
 	if m.snapshot.FX.Rate.IsPositive() {
 		krw = "₩" + money(v.Mul(m.snapshot.FX.Rate))
@@ -1218,7 +1270,7 @@ func (m Model) formatAmount(v decimal.Decimal, currency domain.Currency) string 
 	case currencyKRW:
 		return krw
 	default:
-		return usd + " / " + krw
+		return usd
 	}
 }
 func (m Model) formatSignedAmount(v decimal.Decimal, currency domain.Currency) string {
@@ -1236,7 +1288,7 @@ func (m Model) formatSignedAmount(v decimal.Decimal, currency domain.Currency) s
 	case currencyKRW:
 		return krw
 	default:
-		return usd + " / " + krw
+		return usd
 	}
 }
 func cursor(i, current int) string {

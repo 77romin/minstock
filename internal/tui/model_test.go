@@ -25,6 +25,11 @@ func TestColonCommandsRequirePrefix(t *testing.T) {
 	if cmd == nil {
 		t.Fatal(":q must quit")
 	}
+	next, _ = m.handleKey(":")
+	_, cmd = next.(Model).handleKey("ㅂ")
+	if cmd == nil {
+		t.Fatal(":ㅂ must quit as an alias for :q")
+	}
 }
 
 func TestVimNavigationAndPortfolioTabs(t *testing.T) {
@@ -119,9 +124,9 @@ func TestPortfolioViewRendersRequestedColumnsAndWeights(t *testing.T) {
 		ProfitLoss:    profit,
 		ProfitRate:    decimal.NewFromFloat(3.57),
 	}
-	m := Model{screen: portfolioScreen, portfolioTab: filterKR, width: 180, snapshot: app.Snapshot{Positions: []domain.Position{position}}}
+	m := Model{screen: portfolioScreen, portfolioTab: filterKR, width: 260, snapshot: app.Snapshot{Positions: []domain.Position{position}}}
 	view := m.portfolioView()
-	for _, header := range []string{"구분", "종목명", "평가손익", "수익률", "잔고수량", "평가금액", "매입가", "현재가", "매입금액", "보유비중"} {
+	for _, header := range []string{"구분", "종목명", "수익률", "잔고수량", "평가금액", "매입가", "현재가", "매입금액", "보유비중", "보유금액", "보유주식수"} {
 		if !strings.Contains(view, header) {
 			t.Fatalf("missing portfolio column %q in %q", header, view)
 		}
@@ -131,18 +136,18 @@ func TestPortfolioViewRendersRequestedColumnsAndWeights(t *testing.T) {
 	}
 	var topLine string
 	for _, line := range strings.Split(view, "\n") {
-		if strings.Contains(line, "통화") {
+		if strings.Contains(line, "t: 정렬") {
 			topLine = line
 			break
 		}
 	}
-	if topLine == "" || !strings.Contains(topLine, "열 1-10/10") || !strings.Contains(topLine, "[/]: 열 이동") {
-		t.Fatalf("column range must be on the currency line: %q", view)
+	if topLine == "" || !strings.Contains(topLine, "c: ₩/$") {
+		t.Fatalf("sort/currency hints must be on the portfolio top line: %q", view)
 	}
 	if !strings.Contains(view, fitCell("키움", portfolioColumns[0].width, false)) {
 		t.Fatalf("broker display name is missing in %q", view)
 	}
-	if !strings.Contains(view, positive.Render(fitCell("+25000원", portfolioColumns[2].width, true))) {
+	if !strings.Contains(view, positive.Render(fitCell("+25,000원", portfolioColumns[2].width, true))) {
 		t.Fatalf("positive profit is not red in %q", view)
 	}
 }
@@ -151,7 +156,7 @@ func TestPortfolioLossUsesBlue(t *testing.T) {
 	loss := decimal.NewFromInt(-1000)
 	p := domain.Position{Symbol: domain.Symbol{Name: "테스트", Market: domain.MarketKOSPI, Currency: domain.KRW}, ProfitLoss: loss}
 	row := Model{}.renderPortfolioRow(p, decimal.Zero, []int{2, 3})
-	if !strings.Contains(row, negative.Render(fitCell("-1000원", portfolioColumns[2].width, true))) {
+	if !strings.Contains(row, negative.Render(fitCell("-1,000원", portfolioColumns[2].width, true))) {
 		t.Fatalf("negative profit is not blue: %q", row)
 	}
 	if lipgloss.Width(row) == 0 {
