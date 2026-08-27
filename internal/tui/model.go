@@ -62,7 +62,9 @@ type Model struct {
 	results       []domain.Symbol
 	selected      domain.Symbol
 	candles       []domain.Candle
+	detailQuote   domain.Quote
 	intervalIndex int
+	maVisible     [4]bool
 	refreshEvery  time.Duration
 	filter        marketFilter
 	portfolioTab  marketFilter
@@ -96,6 +98,11 @@ type candlesMsg struct {
 	candles  []domain.Candle
 	err      error
 }
+type quoteMsg struct {
+	symbol domain.Symbol
+	quote  domain.Quote
+	err    error
+}
 type syncMsg struct{ errs []error }
 type watchlistMsg struct{ err error }
 type refreshMsg time.Time
@@ -104,7 +111,7 @@ func New(service *app.Service, mode string, refreshEvery time.Duration) Model {
 	if refreshEvery < time.Second {
 		refreshEvery = 5 * time.Second
 	}
-	return Model{service: service, mode: mode, loading: true, refreshing: true, width: 100, height: 30, intervalIndex: 5, refreshEvery: refreshEvery, portfolioTab: filterKR}
+	return Model{service: service, mode: mode, loading: true, refreshing: true, width: 100, height: 30, intervalIndex: 5, refreshEvery: refreshEvery, portfolioTab: filterKR, maVisible: [4]bool{true, true, true, true}}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -168,6 +175,15 @@ func (m Model) candlesCmd(symbol domain.Symbol) tea.Cmd {
 	}
 }
 
+func (m Model) quoteCmd(symbol domain.Symbol) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		q, err := m.service.Quote(ctx, symbol)
+		return quoteMsg{symbol: symbol, quote: q, err: err}
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -226,6 +242,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case candlesMsg:
 		if msg.symbol.Key() == m.selected.Key() && msg.interval == intervals[m.intervalIndex] {
 			m.candles, m.err, m.loading = msg.candles, msg.err, false
+		}
+	case quoteMsg:
+		if msg.symbol.Key() == m.selected.Key() && msg.err == nil {
+			m.detailQuote = msg.quote
 		}
 	case refreshMsg:
 		nextTick := m.tickCmd()
@@ -326,6 +346,11 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.screen == detailScreen {
+		if key >= "1" && key <= "4" {
+			index := int(key[0] - '1')
+			m.maVisible[index] = !m.maVisible[index]
+			return m, nil
+		}
 		if key == "left" || key == "h" {
 			m.intervalIndex = (m.intervalIndex - 1 + len(intervals)) % len(intervals)
 			m.loading = true
@@ -414,8 +439,8 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		if symbol, ok := m.currentSymbol(); ok {
-			m.previous, m.screen, m.selected, m.loading = m.screen, detailScreen, symbol, true
-			return m, m.candlesCmd(symbol)
+			m.previous, m.screen, m.selected, m.loading, m.detailQuote = m.screen, detailScreen, symbol, true, m.snapshot.Quotes[symbol.Key()]
+			return m, tea.Batch(m.candlesCmd(symbol), m.quoteCmd(symbol))
 		}
 	}
 	return m, nil
@@ -494,8 +519,8 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 		case "enter":
 			if symbol, ok := m.currentSymbol(); ok {
-				m.previous, m.screen, m.selected, m.loading = searchScreen, detailScreen, symbol, true
-				return m, m.candlesCmd(symbol)
+				m.previous, m.screen, m.selected, m.loading, m.detailQuote = searchScreen, detailScreen, symbol, true, m.snapshot.Quotes[symbol.Key()]
+				return m, tea.Batch(m.candlesCmd(symbol), m.quoteCmd(symbol))
 			}
 		}
 		return m, nil
@@ -1156,14 +1181,59 @@ func (m Model) detailView() string {
 	if m.loading {
 		return fmt.Sprintf("%s(%s) · %s\n\n차트 데이터를 불러오는 중…", m.selected.Name, m.selected.Code, interval.KoreanName())
 	}
-	legend := ma5Style.Render("MA5") + "  " + ma20Style.Render("MA20") + "  " + ma60Style.Render("MA60") + "  " + ma120Style.Render("MA120")
+	legendItems := []string{"MA5", "MA20", "MA60", "MA120"}
+	legendStyles := []lipgloss.Style{ma5Style, ma20Style, ma60Style, ma120Style}
+	legendParts := make([]string, len(legendItems))
+	for i, label := range legendItems {
+		if m.maVisible[i] {
+			legendParts[i] = legendStyles[i].Render(label)
+		} else {
+			legendParts[i] = muted.Render("-" + label)
+		}
+	}
+	legend := strings.Join(legendParts, "  ") + "  (1-4 토글)"
 	exchange := ""
 	if m.selected.Exchange != "" {
 		exchange = " · " + m.selected.Exchange
 	}
 	header := fmt.Sprintf("%s (%s) · %s%s · %s  │  %s", m.selected.Name, m.selected.Code, m.selected.Market, exchange, interval.KoreanName(), legend)
-	chartHeight := max(10, m.height-10)
-	return header + "\n" + panel.Render(renderChart(m.candles, m.width-6, chartHeight))
+	chartHeight := max(8, m.height/2-4)
+	cellWidth := max(28, m.width/2-4)
+	chartWidth := max(60, m.width-4)
+	q := m.detailQuote
+	if q.Symbol.Code == "" {
+		q = m.snapshot.Quotes[m.selected.Key()]
+	}
+	// The chart gets the entire upper row so price movements and MA curves
+	// have twice as much horizontal resolution in the terminal.
+	chart := panel.Width(chartWidth).Height(chartHeight).Render(renderChart(m.candles, chartWidth-4, chartHeight-2, m.maVisible[:]...))
+	info := panel.Width(cellWidth).Height(chartHeight).Render(strings.Join([]string{
+		"주식 정보", "", detailMetric("시총", detailDecimal(q.MarketCap)), detailMetric("EPS", detailDecimal(q.EPS)), detailMetric("PER", detailDecimal(q.PER)),
+		detailMetric("시가", m.formatAmount(q.Open, m.selected.Currency)), detailMetric("고가", m.formatAmount(q.High, m.selected.Currency)), detailMetric("저가", m.formatAmount(q.Low, m.selected.Currency)),
+		detailMetric("전일대비", signedPercent(q.ChangeRate)), detailMetric("거래량", commaNumber(fmt.Sprintf("%d", q.Volume))),
+	}, "\n"))
+	analysis := panel.Width(cellWidth).Height(chartHeight).Render("종목 분석\n\n  " + detailAnalysis(q))
+	bottom := lipgloss.JoinHorizontal(lipgloss.Top, info, "  ", analysis)
+	return header + "\n" + chart + "\n" + bottom
+}
+
+func detailMetric(label, value string) string { return fmt.Sprintf("%-8s %s", label, value) }
+
+func detailDecimal(v decimal.Decimal) string {
+	if v.IsZero() {
+		return "-"
+	}
+	return commaNumber(v.StringFixed(2))
+}
+
+func detailAnalysis(q domain.Quote) string {
+	if q.ChangeRate.GreaterThan(decimal.Zero) {
+		return "상승 추세 · 전일 대비 +" + q.ChangeRate.StringFixed(2) + "%"
+	}
+	if q.ChangeRate.LessThan(decimal.Zero) {
+		return "하락 추세 · 전일 대비 " + q.ChangeRate.StringFixed(2) + "%"
+	}
+	return "등락 정보 없음"
 }
 
 func (m Model) helpView() string {

@@ -110,6 +110,9 @@ type Quote struct {
 	Provider    BrokerID
 	Freshness   Freshness
 	TradePower  decimal.Decimal
+	MarketCap   decimal.Decimal
+	EPS         decimal.Decimal
+	PER         decimal.Decimal
 	SourceLabel string
 }
 

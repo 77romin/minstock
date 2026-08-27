@@ -357,15 +357,19 @@ func (c *Client) Quote(ctx context.Context, symbol domain.Symbol) (domain.Quote,
 		return c.usQuote(ctx, symbol)
 	}
 	var out struct {
-		Code   string `json:"stk_cd"`
-		Name   string `json:"stk_nm"`
-		Price  string `json:"cur_prc"`
-		Open   string `json:"open_pric"`
-		High   string `json:"high_pric"`
-		Low    string `json:"low_pric"`
-		Change string `json:"pred_pre"`
-		Rate   string `json:"flu_rt"`
-		Volume string `json:"trde_qty"`
+		Code         string `json:"stk_cd"`
+		Name         string `json:"stk_nm"`
+		Price        string `json:"cur_prc"`
+		Open         string `json:"open_pric"`
+		High         string `json:"high_pric"`
+		Low          string `json:"low_pric"`
+		Change       string `json:"pred_pre"`
+		Rate         string `json:"flu_rt"`
+		Volume       string `json:"trde_qty"`
+		MarketCap    string `json:"mac"`
+		MarketCapAlt string `json:"mkt_cap"`
+		EPS          string `json:"eps"`
+		PER          string `json:"per"`
 	}
 	if err := c.call(ctx, "ka10001", "/api/dostk/stkinfo", map[string]string{"stk_cd": symbol.Code}, &out); err != nil {
 		return domain.Quote{}, err
@@ -374,26 +378,34 @@ func (c *Client) Quote(ctx context.Context, symbol domain.Symbol) (domain.Quote,
 		symbol.Name = out.Name
 	}
 	now := time.Now()
-	return domain.Quote{Symbol: symbol, Price: num(out.Price), Open: num(out.Open), High: num(out.High), Low: num(out.Low), Change: signed(out.Change), ChangeRate: signed(out.Rate), Volume: intNum(out.Volume), MarketTime: now, ReceivedAt: now, Provider: c.ID(), Freshness: domain.FreshLive}, nil
+	marketCap := out.MarketCap
+	if marketCap == "" {
+		marketCap = out.MarketCapAlt
+	}
+	return domain.Quote{Symbol: symbol, Price: num(out.Price), Open: num(out.Open), High: num(out.High), Low: num(out.Low), Change: signed(out.Change), ChangeRate: signed(out.Rate), Volume: intNum(out.Volume), MarketCap: num(marketCap), EPS: signed(out.EPS), PER: signed(out.PER), MarketTime: now, ReceivedAt: now, Provider: c.ID(), Freshness: domain.FreshLive}, nil
 }
 
 func (c *Client) usQuote(ctx context.Context, symbol domain.Symbol) (domain.Quote, error) {
 	type response struct {
-		Exchange    string `json:"stex_tp"`
-		Code        string `json:"stk_cd"`
-		Name        string `json:"stk_nm"`
-		EnglishName string `json:"stk_enm"`
-		Price       string `json:"cur_prc"`
-		Change      string `json:"pred_pre"`
-		Rate        string `json:"flu_rt"`
-		Volume      string `json:"acc_trde_qty"`
-		Previous    string `json:"base_close_pric"`
-		Open        string `json:"open_pric"`
-		High        string `json:"high_pric"`
-		Low         string `json:"low_pric"`
-		PreOpen     string `json:"pre_open_pric"`
-		PreHigh     string `json:"pre_high_pric"`
-		PreLow      string `json:"pre_low_pric"`
+		Exchange     string `json:"stex_tp"`
+		Code         string `json:"stk_cd"`
+		Name         string `json:"stk_nm"`
+		EnglishName  string `json:"stk_enm"`
+		Price        string `json:"cur_prc"`
+		Change       string `json:"pred_pre"`
+		Rate         string `json:"flu_rt"`
+		Volume       string `json:"acc_trde_qty"`
+		Previous     string `json:"base_close_pric"`
+		Open         string `json:"open_pric"`
+		High         string `json:"high_pric"`
+		Low          string `json:"low_pric"`
+		PreOpen      string `json:"pre_open_pric"`
+		PreHigh      string `json:"pre_high_pric"`
+		PreLow       string `json:"pre_low_pric"`
+		MarketCap    string `json:"mac"`
+		MarketCapAlt string `json:"mkt_cap"`
+		EPS          string `json:"eps"`
+		PER          string `json:"per"`
 	}
 	var errs []error
 	for _, exchange := range usExchangeCandidates(symbol.Exchange) {
@@ -424,7 +436,11 @@ func (c *Client) usQuote(ctx context.Context, symbol domain.Symbol) (domain.Quot
 			low = out.PreLow
 		}
 		now := time.Now()
-		return domain.Quote{Symbol: symbol, Price: num(out.Price), Previous: num(out.Previous), Open: num(open), High: num(high), Low: num(low), Change: signed(out.Change), ChangeRate: signed(out.Rate), Volume: intNum(out.Volume), MarketTime: now, ReceivedAt: now, Provider: c.ID(), Freshness: domain.FreshLive, SourceLabel: exchange}, nil
+		marketCap := out.MarketCap
+		if marketCap == "" {
+			marketCap = out.MarketCapAlt
+		}
+		return domain.Quote{Symbol: symbol, Price: num(out.Price), Previous: num(out.Previous), Open: num(open), High: num(high), Low: num(low), Change: signed(out.Change), ChangeRate: signed(out.Rate), Volume: intNum(out.Volume), MarketCap: num(marketCap), EPS: signed(out.EPS), PER: signed(out.PER), MarketTime: now, ReceivedAt: now, Provider: c.ID(), Freshness: domain.FreshLive, SourceLabel: exchange}, nil
 	}
 	return domain.Quote{}, errors.Join(errs...)
 }
