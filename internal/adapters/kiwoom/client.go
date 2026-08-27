@@ -34,6 +34,8 @@ var readOnlyAPIs = map[string]string{
 	"ka10099":  "/api/dostk/stkinfo",
 	"ka01300":  "/api/dostk/watchlist",
 	"ka01301":  "/api/dostk/watchlist",
+	"usa20200": "/api/us/watchlist",
+	"usa20201": "/api/us/watchlist",
 	"ka10079":  "/api/dostk/chart",
 	"ka10080":  "/api/dostk/chart",
 	"ka10081":  "/api/dostk/chart",
@@ -558,8 +560,13 @@ func findUSInstrumentArray(node any) []map[string]any {
 func firstString(item map[string]any, keys ...string) string {
 	for _, key := range keys {
 		if value, ok := item[key]; ok {
-			if s, ok := value.(string); ok {
-				return s
+			switch v := value.(type) {
+			case string:
+				return v
+			case json.Number:
+				return v.String()
+			case float64:
+				return strconv.FormatFloat(v, 'f', -1, 64)
 			}
 		}
 	}
@@ -580,10 +587,33 @@ func (c *Client) WatchlistGroups(ctx context.Context) ([]domain.WatchlistGroup, 
 	for _, g := range out.Groups {
 		groups = append(groups, domain.WatchlistGroup{ID: g.Code, ExternalID: g.Code, Name: g.Name, Provider: c.ID()})
 	}
+	// Kiwoom exposes domestic and US watchlists through separate TRs. Prefix
+	// US group IDs so they cannot collide with domestic group numbers in SQLite.
+	var usRaw json.RawMessage
+	if err := c.call(ctx, "usa20200", "/api/us/watchlist", map[string]string{}, &usRaw); err == nil {
+		for _, g := range parseUSWatchlistGroups(usRaw) {
+			id := "US:" + g.Code
+			groups = append(groups, domain.WatchlistGroup{ID: id, ExternalID: id, Name: g.Name, Provider: c.ID()})
+		}
+	}
 	return groups, nil
 }
 
 func (c *Client) WatchlistItems(ctx context.Context, groupID string) ([]domain.WatchlistItem, error) {
+	if strings.HasPrefix(groupID, "US:") {
+		var raw json.RawMessage
+		groupCode := strings.TrimPrefix(groupID, "US:")
+		// Kiwoom deployments have used both grp_no and arn_grp_id for this
+		// account-scoped request; sending both keeps the client compatible.
+		if err := c.call(ctx, "usa20201", "/api/us/watchlist", map[string]string{"grp_no": groupCode, "gcod": groupCode, "arn_grp_id": groupCode}, &raw); err != nil {
+			return nil, err
+		}
+		items := make([]domain.WatchlistItem, 0)
+		for _, item := range parseUSWatchlistItems(raw) {
+			items = append(items, domain.WatchlistItem{GroupID: groupID, Provider: c.ID(), Symbol: domain.Symbol{Code: item.Code, Ticker: item.Code, Name: item.Name, Market: domain.MarketUS, Currency: domain.USD, Exchange: item.Exchange}})
+		}
+		return items, nil
+	}
 	var out struct {
 		Items []struct {
 			Code string `json:"cod2"`
@@ -594,9 +624,49 @@ func (c *Client) WatchlistItems(ctx context.Context, groupID string) ([]domain.W
 	}
 	items := make([]domain.WatchlistItem, 0, len(out.Items))
 	for _, i := range out.Items {
-		items = append(items, domain.WatchlistItem{GroupID: groupID, Provider: c.ID(), Symbol: domain.Symbol{Code: i.Code, Market: domain.MarketKRX, Currency: domain.KRW}})
+		items = append(items, domain.WatchlistItem{GroupID: groupID, Provider: c.ID(), Symbol: domain.Symbol{Code: i.Code, Ticker: i.Code, Market: domain.MarketKRX, Currency: domain.KRW}})
 	}
 	return items, nil
+}
+
+type usWatchlistEntry struct{ Code, Name, Exchange string }
+
+func parseUSWatchlistGroups(raw json.RawMessage) []usWatchlistEntry {
+	return findUSWatchlistEntries(raw, []string{"grp_no", "grp_id", "gcod", "group_no", "group_id", "id", "seq"}, []string{"grp_nm", "group_nm", "name", "group_name", "groupname"})
+}
+
+func parseUSWatchlistItems(raw json.RawMessage) []usWatchlistEntry {
+	return findUSWatchlistEntries(raw, []string{"stk_cd", "cod2", "ticker", "symbol", "code"}, []string{"stk_nm", "name", "display_name"})
+}
+
+func findUSWatchlistEntries(raw json.RawMessage, codeKeys, nameKeys []string) []usWatchlistEntry {
+	var walk func(any) []usWatchlistEntry
+	walk = func(v any) []usWatchlistEntry {
+		switch x := v.(type) {
+		case []any:
+			out := make([]usWatchlistEntry, 0)
+			for _, child := range x {
+				out = append(out, walk(child)...)
+			}
+			return out
+		case map[string]any:
+			code, name := firstString(x, codeKeys...), firstString(x, nameKeys...)
+			if code != "" {
+				return []usWatchlistEntry{{Code: code, Name: name, Exchange: firstString(x, "stex_tp", "exchange", "exch")}}
+			}
+			out := make([]usWatchlistEntry, 0)
+			for _, child := range x {
+				out = append(out, walk(child)...)
+			}
+			return out
+		}
+		return nil
+	}
+	var decoded any
+	if json.Unmarshal(raw, &decoded) != nil {
+		return nil
+	}
+	return walk(decoded)
 }
 
 func (c *Client) Candles(ctx context.Context, q domain.CandleQuery) ([]domain.Candle, error) {

@@ -64,6 +64,17 @@ func TestInstrumentsFollowsContinuation(t *testing.T) {
 	}
 }
 
+func TestParseUSWatchlistPayloads(t *testing.T) {
+	groups := parseUSWatchlistGroups(json.RawMessage(`{"us_wtch_grp":[{"grp_no":"7","grp_nm":"미국 성장주"}]}`))
+	if len(groups) != 1 || groups[0].Code != "7" || groups[0].Name != "미국 성장주" {
+		t.Fatalf("unexpected groups: %#v", groups)
+	}
+	items := parseUSWatchlistItems(json.RawMessage(`{"us_wtch_stk":[{"stk_cd":"AAPL","stk_nm":"Apple","stex_tp":"ND"}]}`))
+	if len(items) != 1 || items[0].Code != "AAPL" || items[0].Name != "Apple" || items[0].Exchange != "ND" {
+		t.Fatalf("unexpected items: %#v", items)
+	}
+}
+
 func TestUSPortfolioQuoteAndCandles(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/oauth2/token" {
