@@ -48,6 +48,17 @@ func Save(provider, appKey, secret string) error {
 	if err := keyring.Set(service, provider+".app_secret", strings.TrimSpace(secret)); err != nil {
 		return fmt.Errorf("save app secret: %w", err)
 	}
+	// Verify through the keyring backend itself (rather than Load, which may
+	// prefer environment variables) so setup never reports success for a
+	// value that was not persisted by macOS/Linux secret storage.
+	storedKey, err := keyring.Get(service, provider+".app_key")
+	if err != nil || storedKey != strings.TrimSpace(appKey) {
+		return fmt.Errorf("verify app key in OS keyring: value was not persisted")
+	}
+	storedSecret, err := keyring.Get(service, provider+".app_secret")
+	if err != nil || storedSecret != strings.TrimSpace(secret) {
+		return fmt.Errorf("verify app secret in OS keyring: value was not persisted")
+	}
 	return nil
 }
 
