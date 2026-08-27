@@ -56,10 +56,15 @@ TUI 안에서 대부분의 작업을 하므로 옵션은 운영에 필요한 최
 |---|---|
 | `minstock` | TUI 실행 |
 | `minstock sync` | 종목 인덱스와 지원되는 증권사 관심종목 동기화 |
+| `minstock --sync`, `minstock -sy` | `sync`와 동일 |
 | `minstock setup kiwoom` | 키움 App Key/Secret을 OS 키링에 저장 |
 | `minstock setup nh` | NH App Key/Secret을 OS 키링에 저장 |
+| `minstock --setup --kiwoom`, `minstock -s --kiwoom` | 키움 키체인 등록 |
+| `minstock --setup --nh`, `minstock -s --nh` | NH 키체인 등록 |
 | `minstock --diagnose` | 설정 경로, DB 경로, 자격증명 준비 상태 확인 |
+| `minstock -d` | `--diagnose`와 동일 |
 | `minstock --version` | 버전 출력 |
+| `minstock -v` | `--version`과 동일 |
 | `minstock --config ./my.toml` | 지정한 설정 파일로 TUI 실행 |
 | `minstock help` | CLI 사용법 출력 |
 

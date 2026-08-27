@@ -33,8 +33,13 @@ func run(args []string) error {
 	flags.Usage = printUsage
 	configPath := flags.String("config", "", "설정 파일 경로")
 	diagnose := flags.Bool("diagnose", false, "설정 및 연결 준비 상태 진단")
+	diagnoseShort := flags.Bool("d", false, "same as --diagnose")
 	showVersion := flags.Bool("version", false, "버전 출력")
+	versionShort := flags.Bool("v", false, "same as --version")
+	syncFlag := flags.Bool("sync", false, "sync instruments and watchlists")
+	syncShort := flags.Bool("sy", false, "same as --sync")
 	setupFlag := flags.Bool("setup", false, "store broker credentials in the OS keychain")
+	setupShort := flags.Bool("s", false, "same as --setup")
 	kiwoomFlag := flags.Bool("kiwoom", false, "select Kiwoom for --setup")
 	nhFlag := flags.Bool("nh", false, "select NH for --setup")
 	if err := flags.Parse(args); err != nil {
@@ -42,6 +47,18 @@ func run(args []string) error {
 			return nil
 		}
 		return err
+	}
+	if *versionShort {
+		*showVersion = true
+	}
+	if *diagnoseShort {
+		*diagnose = true
+	}
+	if *syncShort {
+		*syncFlag = true
+	}
+	if *setupShort {
+		*setupFlag = true
 	}
 	if *setupFlag {
 		if *kiwoomFlag == *nhFlag {
@@ -51,6 +68,29 @@ func run(args []string) error {
 			return setup("kiwoom")
 		}
 		return setup("nh")
+	}
+	if *syncFlag {
+		remaining := flags.Args()
+		if len(remaining) > 0 {
+			return errors.New("--sync does not accept positional arguments")
+		}
+		cfg, err := config.Load(*configPath)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		rt, err := bootstrap.Build(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		defer rt.Repo.Close()
+		errs := rt.Service.Sync(ctx)
+		if len(errs) > 0 {
+			return errors.Join(errs...)
+		}
+		fmt.Println("Instrument and watchlist sync complete")
+		return nil
 	}
 	if *showVersion {
 		fmt.Println("minstock", version)
@@ -152,16 +192,14 @@ func printUsage() {
 Usage:
   minstock                         Start the TUI
   minstock sync                    Sync instrument and watchlist data
+  minstock --sync, -sy             Same as "minstock sync"
   minstock setup <kiwoom|nh>       Store API credentials in the OS keychain
-  minstock --setup --kiwoom        Same as "minstock setup kiwoom"
-  minstock --setup --nh            Same as "minstock setup nh"
-  minstock --diagnose              Check configuration and credential status
+  minstock --setup, -s --kiwoom    Store Kiwoom credentials
+  minstock --setup, -s --nh        Store NH credentials
+  minstock --diagnose, -d          Check configuration and credential status
   minstock --config <path>         Use an alternate configuration file
-  minstock --version               Print the version
+  minstock --version, -v           Print the version
   minstock --help, -h              Show this help
-
-Options:
-  --setup --kiwoom|--nh             Select a broker when using --setup
 
 This program is read-only. Order APIs are not enabled.`)
 }
