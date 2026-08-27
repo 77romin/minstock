@@ -103,6 +103,27 @@ HTTP 요청 전에 거부한다. 주문 경로 차단은 자동 테스트로 검
 진단에는 준비 상태와 안전한 endpoint만 표시하며 키, Secret과 접근 토큰은 출력하지
 않는다.
 
+#### 키체인 저장 위치와 저장 검증 이슈
+
+`minstock setup kiwoom`은 환경변수에 값을 쓰는 명령이 아니다. `go-keyring`의
+macOS backend가 `/usr/bin/security add-generic-password`를 호출해 `minstock`
+서비스와 `kiwoom.app_key`, `kiwoom.app_secret` 계정으로 기본 키체인에 저장한다.
+일반적으로 이 저장소는 사용자의 로컬 로그인 키체인(`login.keychain-db`)이며,
+iCloud Keychain에 자동 동기화된다고 가정하지 않는다. tmux는 셸 환경변수만 유지할
+뿐 키체인 저장 위치나 수명을 바꾸지 않는다.
+
+초기 구현에서는 저장 성공 메시지를 `keyring.Set`의 반환값만으로 판단했다. 이후
+등록 다음 날 `--diagnose`에서 자격증명이 `미설정`으로 나타나 실제 저장 여부를
+확인할 수 없었던 사례가 발생했다. 코드에는 삭제 경로가 없었고, macOS 기본 키체인
+변경·초기화, 다른 키체인 컨텍스트, 환경변수와 키체인의 혼동 가능성을 분리해
+점검했다. `security find-generic-password`로 항목 존재 여부를 값 노출 없이 확인했다.
+
+해결책으로 `Security.Save()`가 두 값을 저장한 뒤 키체인 backend에서 즉시 다시
+읽어 입력값과 일치하는지 검증하도록 보강했다. 검증 실패 시 성공 메시지를 출력하지
+않으며, `--diagnose`는 `os-keyring`과 `environment` 출처를 구분해 표시한다. 이
+경험을 통해 금융 자격증명은 저장 API의 성공 반환만 믿지 않고 저장 후 읽기 검증,
+출처 진단, 키체인과 iCloud의 저장 경계 문서화를 함께 제공해야 한다는 점을 배웠다.
+
 ### 4. 한글과 ANSI 색상이 포함된 표 정렬
 
 문제: 한글은 터미널 표시 폭이 2칸이고 ANSI 색상 코드는 문자열 길이에 포함되므로
