@@ -1,6 +1,7 @@
 package security
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -29,7 +30,14 @@ func Load(provider string) (Credentials, error) {
 	appKey, keyErr := keyring.Get(service, provider+".app_key")
 	secret, secretErr := keyring.Get(service, provider+".app_secret")
 	if keyErr != nil || secretErr != nil || appKey == "" || secret == "" {
-		return Credentials{}, fmt.Errorf("%s credentials not configured", provider)
+		if (keyErr != nil && !errors.Is(keyErr, keyring.ErrNotFound)) || (secretErr != nil && !errors.Is(secretErr, keyring.ErrNotFound)) {
+			backendErr := keyErr
+			if backendErr == nil {
+				backendErr = secretErr
+			}
+			return Credentials{}, fmt.Errorf("%s OS keyring unavailable or access denied: %v", provider, backendErr)
+		}
+		return Credentials{}, fmt.Errorf("%s credentials not found in environment or OS keyring", provider)
 	}
 	return Credentials{AppKey: appKey, Secret: secret, Source: "os-keyring"}, nil
 }

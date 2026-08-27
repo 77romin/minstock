@@ -180,6 +180,8 @@ func printDiagnosis(cfg config.Config) error {
 		state := "미설정"
 		if creds, err := security.Load(item.name); err == nil {
 			state = "설정됨 (" + creds.Source + ")"
+		} else {
+			state = "미설정 (" + err.Error() + ")"
 		}
 		fmt.Printf("%-7s: %-24s mode=%-4s endpoint=%s\n", item.name, state, item.broker.Mode, item.broker.BaseURL)
 	}
