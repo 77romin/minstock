@@ -21,14 +21,22 @@ import (
 )
 
 type Client struct {
-	baseURL string
-	authURL string
-	creds   security.Credentials
-	http    *http.Client
-	limiter *rate.Limiter
-	mu      sync.Mutex
-	token   string
-	expires time.Time
+	baseURL    string
+	authURL    string
+	creds      security.Credentials
+	http       *http.Client
+	limiter    *rate.Limiter
+	mu         sync.Mutex
+	token      string
+	expires    time.Time
+	balanceMu  sync.Mutex
+	balances   map[string]cachedBalance
+	cacheToken bool
+}
+
+type cachedBalance struct {
+	value     balanceEnvelope
+	fetchedAt time.Time
 }
 
 func New(baseURL, authURL string, creds security.Credentials) (*Client, error) {
@@ -39,7 +47,13 @@ func New(baseURL, authURL string, creds security.Credentials) (*Client, error) {
 	if err := validateURL(authURL); err != nil {
 		return nil, err
 	}
-	return &Client{baseURL: baseURL, authURL: authURL, creds: creds, http: &http.Client{Timeout: 15 * time.Second}, limiter: rate.NewLimiter(4, 1)}, nil
+	auth, _ := url.Parse(authURL)
+	cacheToken := auth.Hostname() != "localhost" && auth.Hostname() != "127.0.0.1"
+	return &Client{
+		baseURL: baseURL, authURL: authURL, creds: creds,
+		http: &http.Client{Timeout: 15 * time.Second}, limiter: rate.NewLimiter(4, 1),
+		balances: make(map[string]cachedBalance), cacheToken: cacheToken,
+	}, nil
 }
 
 func validateURL(raw string) error {
@@ -73,6 +87,12 @@ func (c *Client) accessToken(ctx context.Context) (string, error) {
 	if c.token != "" && time.Now().Add(time.Minute).Before(c.expires) {
 		return c.token, nil
 	}
+	if c.cacheToken {
+		if cached, err := security.LoadToken("nh", c.creds.AppKey); err == nil && time.Now().Add(time.Minute).Before(cached.ExpiresAt) {
+			c.token, c.expires = cached.Value, cached.ExpiresAt
+			return c.token, nil
+		}
+	}
 	values := url.Values{"appkey": {c.creds.AppKey}, "appsecretkey": {c.creds.Secret}, "grant_type": {"client_credentials"}, "scope": {"oob"}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.authURL+"/oauth2/token?"+values.Encode(), strings.NewReader(values.Encode()))
 	if err != nil {
@@ -101,6 +121,11 @@ func (c *Client) accessToken(ctx context.Context) (string, error) {
 	}
 	c.token = out.Token
 	c.expires = time.Now().Add(time.Duration(out.Expires) * time.Second)
+	// Authentication must still succeed if the local keyring is temporarily
+	// unavailable. In that case this process keeps using its in-memory token.
+	if c.cacheToken {
+		_ = security.SaveToken("nh", c.token, c.expires, c.creds.AppKey)
+	}
 	return c.token, nil
 }
 
@@ -136,6 +161,9 @@ func (c *Client) call(ctx context.Context, path string, input map[string]any, ou
 			c.token = ""
 			c.expires = time.Time{}
 			c.mu.Unlock()
+			if c.cacheToken {
+				security.DeleteToken("nh")
+			}
 			token, err = c.accessToken(ctx)
 			if err != nil {
 				return err
@@ -191,8 +219,19 @@ type balanceEnvelope struct {
 }
 
 func (c *Client) fetchBalance(ctx context.Context, accountID string) (balanceEnvelope, error) {
+	c.balanceMu.Lock()
+	defer c.balanceMu.Unlock()
+	if cached, ok := c.balances[accountID]; ok && time.Since(cached.fetchedAt) < 5*time.Second {
+		return cached.value, nil
+	}
 	var out balanceEnvelope
-	err := c.call(ctx, "/krstock/inquiry/v1/balance", map[string]any{"act_no": accountID, "bnc_bse_cd": "5", "ltg_aot_dit_cd": "9", "aet_bse": "2", "qut_dit_cd": "UNT"}, &out)
+	err := c.call(ctx, "/krstock/inquiry/v1/balance", map[string]any{
+		"act_no": accountID, "bnc_bse_cd": "5", "ltg_aot_dit_cd": "9", "aet_bse": "2",
+		"qut_dit_cd": "UNT", "aly_qut_cd": "1",
+	}, &out)
+	if err == nil {
+		c.balances[accountID] = cachedBalance{value: out, fetchedAt: time.Now()}
+	}
 	return out, err
 }
 func (c *Client) Balance(ctx context.Context, accountID string) (domain.Balance, error) {
@@ -221,6 +260,44 @@ func (c *Client) Positions(ctx context.Context, accountID string) ([]domain.Posi
 		code := first(p, "iem_cd", "pdno", "stck_shrn_iscd")
 		symbol := domain.Symbol{Code: code, Ticker: code, Name: first(p, "iem_nm", "prdt_name"), Market: domain.MarketKRX, Currency: domain.KRW}
 		positions = append(positions, domain.Position{AccountID: accountID, Broker: c.ID(), Symbol: symbol, Quantity: decAny(p, "hldg_qty", "hold_qty"), Tradable: decAny(p, "ord_psbl_qty", "sell_psbl_qty"), AveragePrice: decAny(p, "pchs_avg_pric", "pchs_avg_prc"), CurrentPrice: decAny(p, "stck_prpr", "prpr"), PurchaseValue: decAny(p, "pchs_amt", "buy_amt"), MarketValue: decAny(p, "evlu_amt", "evlu_pfls_amt"), ProfitLoss: decAnySigned(p, "evlu_pfls_amt", "evlu_pfls"), ProfitRate: decAnySigned(p, "evlu_pfls_rt", "evlu_erng_rt"), AsOf: time.Now()})
+	}
+	foreign, foreignErr := c.foreignPositions(ctx, accountID)
+	if foreignErr != nil {
+		if len(positions) == 0 {
+			return nil, foreignErr
+		}
+		return positions, nil
+	}
+	positions = append(positions, foreign...)
+	return positions, nil
+}
+
+func (c *Client) foreignPositions(ctx context.Context, accountID string) ([]domain.Position, error) {
+	var out struct {
+		Positions []map[string]any `json:"Output_1"`
+	}
+	if err := c.call(ctx, "/gbstock/inquiry/v1/balance", map[string]any{
+		"act_no": accountID, "qut_iqr_dit_cd": "9", "fc_sec_trd_nat_cd": "200",
+		"cur_cd": "USD", "xns_dit_cd": "1",
+	}, &out); err != nil {
+		return nil, err
+	}
+	positions := make([]domain.Position, 0, len(out.Positions))
+	for _, p := range out.Positions {
+		code := first(p, "iem_cd")
+		if code == "" {
+			continue
+		}
+		name := first(p, "iem_nm", "oss_iem_eng_nm")
+		symbol := domain.Symbol{Code: code, Ticker: code, Name: name, Market: domain.MarketUS, Currency: domain.USD}
+		positions = append(positions, domain.Position{
+			AccountID: accountID, Broker: c.ID(), Symbol: symbol,
+			Quantity: decAny(p, "cns_bse_bnc_qty"), Tradable: decAny(p, "sll_pbl_qty1"),
+			AveragePrice: decAny(p, "fc_avg_phs_pr", "fc_phs_uit_pr"), CurrentPrice: decAny(p, "fc_sec_end_pr"),
+			PurchaseValue: decAny(p, "fc_abk_amt", "fc_cns_bse_phs_xps"), MarketValue: decAny(p, "fc_eal_amt"),
+			ProfitLoss: decAnySigned(p, "fc_eal_pls_amt"), ProfitRate: decAnySigned(p, "eal_pft_rt", "eal_pft_rt1"),
+			AsOf: time.Now(),
+		})
 	}
 	return positions, nil
 }

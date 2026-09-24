@@ -1,10 +1,13 @@
 package security
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/zalando/go-keyring"
 )
@@ -73,4 +76,48 @@ func Save(provider, appKey, secret string) error {
 func Configured(provider string) bool {
 	_, err := Load(provider)
 	return err == nil
+}
+
+type CachedToken struct {
+	Value     string    `json:"value"`
+	ExpiresAt time.Time `json:"expires_at"`
+	KeyID     string    `json:"key_id"`
+}
+
+// SaveToken persists a short-lived broker access token in the same OS keyring
+// as the API credentials. This avoids issuing a fresh token (and generating a
+// broker security notification) whenever the TUI process restarts.
+func SaveToken(provider, value string, expiresAt time.Time, appKey string) error {
+	if strings.TrimSpace(value) == "" || expiresAt.IsZero() || strings.TrimSpace(appKey) == "" {
+		return errors.New("token, expiration, and app key are required")
+	}
+	payload, err := json.Marshal(CachedToken{Value: value, ExpiresAt: expiresAt, KeyID: tokenKeyID(appKey)})
+	if err != nil {
+		return err
+	}
+	return keyring.Set(service, strings.ToLower(provider)+".access_token", string(payload))
+}
+
+func LoadToken(provider, appKey string) (CachedToken, error) {
+	payload, err := keyring.Get(service, strings.ToLower(provider)+".access_token")
+	if err != nil {
+		return CachedToken{}, err
+	}
+	var token CachedToken
+	if err := json.Unmarshal([]byte(payload), &token); err != nil {
+		return CachedToken{}, err
+	}
+	if token.Value == "" || token.ExpiresAt.IsZero() || token.KeyID != tokenKeyID(appKey) {
+		return CachedToken{}, errors.New("cached token is incomplete")
+	}
+	return token, nil
+}
+
+func tokenKeyID(appKey string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(appKey)))
+	return fmt.Sprintf("%x", sum[:8])
+}
+
+func DeleteToken(provider string) {
+	_ = keyring.Delete(service, strings.ToLower(provider)+".access_token")
 }
