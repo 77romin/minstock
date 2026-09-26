@@ -1,6 +1,6 @@
 # README 스크린샷 가이드
 
-README의 화면 미리보기에는 아래 다섯 장을 사용합니다. 현재 자산·손익·보유 종목이
+README의 화면 미리보기에는 아래 여섯 장을 사용합니다. 현재 자산·손익·보유 종목이
 표시되는 세 이미지는 실제 화면을 기반으로 합성 샘플 데이터로 교체했습니다.
 
 | 파일 | 권장 화면 | 보여줄 포인트 |
@@ -10,6 +10,7 @@ README의 화면 미리보기에는 아래 다섯 장을 사용합니다. 현재
 | `chart.png` | 종목 상세 화면 | 캔들, MA5·20·60·120, 종목 정보와 분석 근거 |
 | `discovery.png` | 검색 또는 급등 분석 | 한글·영문·티커 검색이나 조건별 분석 근거 |
 | `diagnose.png` | 연결 진단 화면 | 공급자 연결 상태와 데이터 기준 시각 |
+| `manual.png` | CLI 도움말 | 실행·동기화·설정·진단 명령과 조회 전용 안내 |
 
 ## 촬영 권장 조건
 
@@ -34,7 +35,8 @@ README의 화면 미리보기에는 아래 다섯 장을 사용합니다. 현재
     <td width="50%"><img src="docs/images/discovery.png" alt="검색과 급등 분석"></td>
   </tr>
   <tr>
-    <td colspan="2"><img src="docs/images/diagnose.png" alt="연결 진단"></td>
+    <td width="50%"><img src="docs/images/diagnose.png" alt="연결 진단"></td>
+    <td width="50%"><img src="docs/images/manual.png" alt="CLI 도움말"></td>
   </tr>
 </table>
 ```

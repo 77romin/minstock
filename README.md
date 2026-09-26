@@ -51,9 +51,13 @@ NH투자증권(NAMUH PLUG)과 키움증권 OpenAPI에 흩어진 국내·미국�
     </td>
   </tr>
   <tr>
-    <td align="center" colspan="2">
+    <td align="center" width="50%">
       <img src="docs/images/diagnose.png" alt="증권사 연결 및 데이터 진단"><br>
       <sub><strong>연결 진단</strong> — 공급자별 연결 상태와 데이터 기준 시각</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/manual.png" alt="minstock CLI 도움말"><br>
+      <sub><strong>CLI 도움말</strong> — 실행·동기화·설정·진단 명령 안내</sub>
     </td>
   </tr>
 </table>
