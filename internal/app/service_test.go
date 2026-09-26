@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/77romin/stock-min-tui/internal/adapters/mock"
-	db "github.com/77romin/stock-min-tui/internal/adapters/sqlite"
-	"github.com/77romin/stock-min-tui/internal/domain"
-	"github.com/77romin/stock-min-tui/internal/ports"
+	"github.com/77romin/minstock-tui/internal/adapters/mock"
+	db "github.com/77romin/minstock-tui/internal/adapters/sqlite"
+	"github.com/77romin/minstock-tui/internal/domain"
+	"github.com/77romin/minstock-tui/internal/ports"
 )
 
 func TestDemoServiceEndToEnd(t *testing.T) {

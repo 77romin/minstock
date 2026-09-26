@@ -4,14 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/77romin/stock-min-tui/internal/adapters/kiwoom"
-	"github.com/77romin/stock-min-tui/internal/adapters/mock"
-	"github.com/77romin/stock-min-tui/internal/adapters/nh"
-	db "github.com/77romin/stock-min-tui/internal/adapters/sqlite"
-	"github.com/77romin/stock-min-tui/internal/app"
-	"github.com/77romin/stock-min-tui/internal/config"
-	"github.com/77romin/stock-min-tui/internal/ports"
-	"github.com/77romin/stock-min-tui/internal/security"
+	"github.com/77romin/minstock-tui/internal/adapters/kiwoom"
+	"github.com/77romin/minstock-tui/internal/adapters/mock"
+	"github.com/77romin/minstock-tui/internal/adapters/nh"
+	db "github.com/77romin/minstock-tui/internal/adapters/sqlite"
+	"github.com/77romin/minstock-tui/internal/app"
+	"github.com/77romin/minstock-tui/internal/config"
+	"github.com/77romin/minstock-tui/internal/ports"
+	"github.com/77romin/minstock-tui/internal/security"
 )
 
 type Runtime struct {

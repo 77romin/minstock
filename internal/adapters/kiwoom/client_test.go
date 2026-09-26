@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/77romin/stock-min-tui/internal/domain"
-	"github.com/77romin/stock-min-tui/internal/security"
+	"github.com/77romin/minstock-tui/internal/domain"
+	"github.com/77romin/minstock-tui/internal/security"
 	"github.com/shopspring/decimal"
 )
 

@@ -29,7 +29,7 @@ Go 기반 주식 관리 TUI입니다. 주문 권한은 포함하지 않은 조�
 Go 1.27 이상이 필요합니다.
 
 ```sh
-git clone https://github.com/77romin/stock-min-tui.git
+git clone https://github.com/77romin/minstock-tui.git
 cd stock-min-tui
 make build
 ./bin/minstock

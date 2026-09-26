@@ -10,8 +10,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/77romin/stock-min-tui/internal/app"
-	"github.com/77romin/stock-min-tui/internal/domain"
+	"github.com/77romin/minstock-tui/internal/app"
+	"github.com/77romin/minstock-tui/internal/domain"
 	"github.com/shopspring/decimal"
 )
 
