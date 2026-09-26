@@ -11,10 +11,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/mink/stock-min-tui/internal/bootstrap"
-	"github.com/mink/stock-min-tui/internal/config"
-	"github.com/mink/stock-min-tui/internal/security"
-	"github.com/mink/stock-min-tui/internal/tui"
+	"github.com/77romin/stock-min-tui/internal/bootstrap"
+	"github.com/77romin/stock-min-tui/internal/config"
+	"github.com/77romin/stock-min-tui/internal/security"
+	"github.com/77romin/stock-min-tui/internal/tui"
 	"golang.org/x/term"
 )
 

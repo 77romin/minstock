@@ -9,7 +9,7 @@ import (
 	"github.com/NimbleMarkets/ntcharts/v2/canvas"
 	"github.com/NimbleMarkets/ntcharts/v2/canvas/graph"
 	"github.com/NimbleMarkets/ntcharts/v2/canvas/runes"
-	"github.com/mink/stock-min-tui/internal/domain"
+	"github.com/77romin/stock-min-tui/internal/domain"
 )
 
 var (

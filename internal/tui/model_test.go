@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/mink/stock-min-tui/internal/app"
-	"github.com/mink/stock-min-tui/internal/domain"
+	"github.com/77romin/stock-min-tui/internal/app"
+	"github.com/77romin/stock-min-tui/internal/domain"
 	"github.com/shopspring/decimal"
 )
 

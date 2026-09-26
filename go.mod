@@ -1,4 +1,4 @@
-module github.com/mink/stock-min-tui
+module github.com/77romin/stock-min-tui
 
 go 1.27
 

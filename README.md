@@ -29,7 +29,7 @@ Go 기반 주식 관리 TUI입니다. 주문 권한은 포함하지 않은 조�
 Go 1.27 이상이 필요합니다.
 
 ```sh
-git clone https://github.com/mink/stock-min-tui.git
+git clone https://github.com/77romin/stock-min-tui.git
 cd stock-min-tui
 make build
 ./bin/minstock
@@ -363,4 +363,4 @@ NH 미국주식 잔고 조회를 지원합니다. 소스에서 실행 파일을 
 
 ## 라이선스
 
-라이선스는 아직 지정하지 않았습니다. 외부 공개 전에 `LICENSE` 파일을 추가하십시오.
+이 프로젝트는 [MIT License](LICENSE)로 배포됩니다.

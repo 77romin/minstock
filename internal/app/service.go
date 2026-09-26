@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mink/stock-min-tui/internal/domain"
-	"github.com/mink/stock-min-tui/internal/ports"
+	"github.com/77romin/stock-min-tui/internal/domain"
+	"github.com/77romin/stock-min-tui/internal/ports"
 	"github.com/shopspring/decimal"
 )
 

@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/mink/stock-min-tui/internal/security"
+	"github.com/77romin/stock-min-tui/internal/security"
 )
 
 func TestAccountsContract(t *testing.T) {

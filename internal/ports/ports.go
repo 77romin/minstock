@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/mink/stock-min-tui/internal/domain"
+	"github.com/77romin/stock-min-tui/internal/domain"
 )
 
 type PortfolioReader interface {
