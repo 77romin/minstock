@@ -27,37 +27,41 @@ NH투자증권(NAMUH PLUG)과 키움증권 OpenAPI에 흩어진 국내·미국�
 
 ## 화면 미리보기
 
-아래 영역은 캡처를 추가할 자리입니다. 계좌번호와 실제 평가금액이 노출되지 않도록
-가능하면 **데모 모드**에서 촬영하고, 가로 1200px 이상의 동일한 터미널 크기를 권장합니다.
+주요 화면에서 통합 자산 조회부터 종목 탐색과 연결 진단까지 확인할 수 있습니다.
 
 <table>
   <tr>
-    <td align="center" width="50%" height="220">
-      <strong>① 통합 현황 대시보드</strong><br><br>
-      증권사 연결 상태, 원화·외화 자산 합계와 갱신 시각<br><br>
-      <code>docs/images/dashboard.png</code>
+    <td align="center" width="50%">
+      <img src="docs/images/dashboard.png" alt="통합 현황 대시보드"><br>
+      <sub><strong>통합 현황</strong> — 증권사 연결 상태와 원화·외화 자산 요약</sub>
     </td>
-    <td align="center" width="50%" height="220">
-      <strong>② 내 주식 화면</strong><br><br>
-      한국/미국 탭, 손익·수익률·보유비중과 통화 전환<br><br>
-      <code>docs/images/portfolio.png</code>
+    <td align="center" width="50%">
+      <img src="docs/images/portfolio.png" alt="내 주식 포트폴리오"><br>
+      <sub><strong>내 주식</strong> — 한국·미국 종목별 손익과 수익률</sub>
     </td>
   </tr>
   <tr>
-    <td align="center" width="50%" height="220">
-      <strong>③ 종목 상세 차트</strong><br><br>
-      캔들 차트, MA5·20·60·120과 봉 단위 전환<br><br>
-      <code>docs/images/chart.png</code>
+    <td align="center" width="50%">
+      <img src="docs/images/chart.png" alt="종목 상세 차트"><br>
+      <sub><strong>상세 차트</strong> — 캔들과 MA5·20·60·120 분석</sub>
     </td>
-    <td align="center" width="50%" height="220">
-      <strong>④ 검색·관심종목·급등 분석</strong><br><br>
-      로컬 종목 검색과 규칙 기반 분석 근거<br><br>
-      <code>docs/images/discovery.png</code>
+    <td align="center" width="50%">
+      <img src="docs/images/discovery.png" alt="종목 검색"><br>
+      <sub><strong>종목 검색</strong> — 티커·종목명·종목코드 로컬 검색</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="docs/images/diagnose.png" alt="증권사 연결 및 데이터 진단"><br>
+      <sub><strong>연결 진단</strong> — 공급자별 연결 상태와 데이터 기준 시각</sub>
     </td>
   </tr>
 </table>
 
-캡처 파일 준비 방법과 교체할 Markdown은
+> 위 캡처에 표시된 종목·금액·수익률은 가상투자 시뮬레이션을 위해 구성한 합성 샘플
+> 데이터이며, 실제 계좌나 투자 성과를 나타내지 않습니다.
+
+캡처 갱신 방법과 개인정보 확인 항목은
 [스크린샷 가이드](docs/images/README.md)에 정리했습니다.
 
 ## 기술 스택
