@@ -63,6 +63,8 @@ type Repository interface {
 	LoadCache(context.Context, string) ([]byte, time.Time, error)
 	SavePortfolioSnapshots(context.Context, []domain.PortfolioSnapshot) error
 	ListPortfolioSnapshots(context.Context, time.Time, time.Time) ([]domain.PortfolioSnapshot, error)
+	ListAllocationTargets(context.Context, string) ([]domain.AllocationTarget, error)
+	ReplaceAllocationTargets(context.Context, string, []domain.AllocationTarget) error
 	SaveCandles(context.Context, []domain.Candle) error
 	LoadCandles(context.Context, domain.CandleQuery) ([]domain.Candle, error)
 	Close() error

@@ -132,8 +132,8 @@ func TestDividendScreenNavigation(t *testing.T) {
 		t.Fatalf("dividend navigation screen=%v loading=%v cmd=%v", got.screen, got.dividendLoading, cmd)
 	}
 	next, _ = got.handleKey("right")
-	if next.(Model).screen != dashboardScreen {
-		t.Fatalf("dividend right must wrap to dashboard: %v", next.(Model).screen)
+	if next.(Model).screen != allocationScreen {
+		t.Fatalf("dividend right must move to allocation: %v", next.(Model).screen)
 	}
 }
 
@@ -167,6 +167,45 @@ func TestDividendTabTogglesHoldingsAndCalendar(t *testing.T) {
 	m = next.(Model)
 	if m.dividendDisplay != dividendHoldings || !strings.Contains(m.notice, "종목별") {
 		t.Fatalf("shift+tab dividend display=%v notice=%q", m.dividendDisplay, m.notice)
+	}
+}
+
+func TestAllocationInputUpdatesTargetAndStatus(t *testing.T) {
+	m := Model{screen: allocationScreen, allocation: app.AllocationReport{Rows: []app.AllocationRow{{
+		Target:         domain.AllocationTarget{Cash: true, TargetPercent: decimal.NewFromInt(50)},
+		CurrentPercent: decimal.NewFromInt(80),
+	}}}}
+	next, _ := m.handleKey("enter")
+	m = next.(Model)
+	if !m.allocationEditing {
+		t.Fatal("allocation edit did not start")
+	}
+	m.allocationInput = "75"
+	next, _ = m.handleKey("enter")
+	m = next.(Model)
+	if m.allocationEditing || !m.allocation.Rows[0].Target.TargetPercent.Equal(decimal.NewFromInt(75)) {
+		t.Fatalf("target not updated: %#v", m.allocation)
+	}
+	if view := m.allocationView(); !strings.Contains(view, "+5.00%") || !strings.Contains(view, "초과") {
+		t.Fatalf("updated deviation missing: %q", view)
+	}
+}
+
+func TestAllocationAddModeAcceptsTicker(t *testing.T) {
+	m := Model{screen: allocationScreen}
+	next, _ := m.handleKey("a")
+	m = next.(Model)
+	if !m.allocationAdding {
+		t.Fatal("allocation add did not start")
+	}
+	next, _ = m.handleKey("Q")
+	m = next.(Model)
+	next, _ = m.handleKey("Q")
+	m = next.(Model)
+	next, _ = m.handleKey("Q")
+	m = next.(Model)
+	if m.allocationInput != "QQQ" {
+		t.Fatalf("ticker input=%q", m.allocationInput)
 	}
 }
 

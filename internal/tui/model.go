@@ -25,6 +25,7 @@ const (
 	moversScreen
 	performanceScreen
 	dividendScreen
+	allocationScreen
 	detailScreen
 	helpScreen
 	diagnosticsScreen
@@ -111,6 +112,11 @@ type Model struct {
 	liveLoaded          bool
 	dividendLoading     bool
 	dividendHoldingsKey string
+	allocation          app.AllocationReport
+	allocationScope     int
+	allocationEditing   bool
+	allocationAdding    bool
+	allocationInput     string
 }
 
 type cachedDashboardMsg struct {
@@ -124,6 +130,15 @@ type performanceMsg struct {
 	err     error
 }
 type dividendMsg struct{ report app.DividendReport }
+type allocationMsg struct {
+	report app.AllocationReport
+	err    error
+}
+type allocationSavedMsg struct{ err error }
+type allocationSymbolMsg struct {
+	symbol domain.Symbol
+	err    error
+}
 type searchMsg struct {
 	query   string
 	results []domain.Symbol
@@ -195,6 +210,48 @@ func (m Model) dividendCmd() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		return dividendMsg{report: m.service.DividendPortfolio(ctx, m.snapshot.Positions, m.snapshot.FX)}
+	}
+}
+
+func (m Model) allocationCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		report, err := m.service.AllocationReport(ctx, m.allocationScopeName(), m.snapshot)
+		return allocationMsg{report, err}
+	}
+}
+func (m Model) saveAllocationCmd() tea.Cmd {
+	targets := make([]domain.AllocationTarget, len(m.allocation.Rows))
+	for i, row := range m.allocation.Rows {
+		targets[i] = row.Target
+	}
+	scope := m.allocationScopeName()
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return allocationSavedMsg{m.service.SaveAllocationTargets(ctx, scope, targets)}
+	}
+}
+
+func (m Model) allocationSymbolCmd(query string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		results, err := m.service.Search(ctx, query)
+		if err != nil {
+			return allocationSymbolMsg{err: err}
+		}
+		query = strings.ToUpper(strings.TrimSpace(query))
+		for _, symbol := range results {
+			if strings.ToUpper(symbol.Ticker) == query || strings.ToUpper(symbol.Code) == query {
+				return allocationSymbolMsg{symbol: symbol}
+			}
+		}
+		if len(results) > 0 {
+			return allocationSymbolMsg{symbol: results[0]}
+		}
+		return allocationSymbolMsg{err: fmt.Errorf("종목 %q을 찾지 못했습니다", query)}
 	}
 }
 
@@ -275,6 +332,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.dividendLoading = true
 			commands = append(commands, m.dividendCmd())
 		}
+		if m.screen == allocationScreen && !m.allocationEditing && !m.allocationAdding {
+			commands = append(commands, m.allocationCmd())
+		}
 		return m, tea.Batch(commands...)
 	case enrichmentMsg:
 		m.snapshot, m.enriching = msg.snapshot, false
@@ -287,6 +347,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case dividendMsg:
 		m.dividends, m.dividendLoading = msg.report, false
+	case allocationMsg:
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.allocation = msg.report
+		}
+	case allocationSavedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.notice = "목표 비중을 저장했습니다"
+			return m, m.allocationCmd()
+		}
+	case allocationSymbolMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			break
+		}
+		for _, row := range m.allocation.Rows {
+			if row.Target.Symbol.Key() == msg.symbol.Key() {
+				m.notice = "이미 목표 목록에 있는 종목입니다"
+				return m, nil
+			}
+		}
+		m.allocation.Rows = append(m.allocation.Rows, app.AllocationRow{Target: domain.AllocationTarget{Scope: m.allocationScopeName(), Symbol: msg.symbol}})
+		m.cursor = len(m.allocation.Rows) - 1
+		m.notice = msg.symbol.Name + "을 목표 목록에 추가했습니다"
 	case syncMsg:
 		m.syncing = false
 		if len(msg.errs) > 0 {
@@ -337,6 +424,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	if key == "ctrl+c" {
 		return m, tea.Quit
+	}
+	if m.screen == allocationScreen && (m.allocationEditing || m.allocationAdding) {
+		return m.handleAllocationInput(key)
 	}
 	if !m.commandMode && !m.searchEditing && key == "?" {
 		if m.screen == helpScreen {
@@ -454,6 +544,9 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		m.screen, m.cursor, m.dividendLoading = dividendScreen, 0, true
 		m.dividendHoldingsKey = dividendHoldingsKey(m.snapshot.Positions)
 		return m, m.dividendCmd()
+	case "8":
+		m.screen, m.cursor = allocationScreen, 0
+		return m, m.allocationCmd()
 	case "m":
 		return m.toggleWatchlist()
 	case "f":
@@ -472,6 +565,10 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		} else if m.screen == dividendScreen {
 			m.dividendDisplay = (m.dividendDisplay + 1) % 2
 			m.notice = "배당 보기: " + m.dividendDisplayName()
+		} else if m.screen == allocationScreen {
+			m.allocationScope = (m.allocationScope + 1) % 3
+			m.cursor = 0
+			return m, m.allocationCmd()
 		}
 	case "shift+tab":
 		if m.screen == portfolioScreen {
@@ -482,14 +579,24 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		} else if m.screen == dividendScreen {
 			m.dividendDisplay = (m.dividendDisplay + 1) % 2
 			m.notice = "배당 보기: " + m.dividendDisplayName()
+		} else if m.screen == allocationScreen {
+			m.allocationScope = (m.allocationScope + 2) % 3
+			m.cursor = 0
+			return m, m.allocationCmd()
 		}
 	case "right", "l":
-		if m.screen >= dashboardScreen && m.screen <= dividendScreen {
+		if m.screen >= dashboardScreen && m.screen <= allocationScreen {
 			m.nextPrimaryScreen(1)
+			if m.screen == allocationScreen {
+				return m, m.allocationCmd()
+			}
 		}
 	case "left", "h":
-		if m.screen >= dashboardScreen && m.screen <= dividendScreen {
+		if m.screen >= dashboardScreen && m.screen <= allocationScreen {
 			m.nextPrimaryScreen(-1)
+			if m.screen == allocationScreen {
+				return m, m.allocationCmd()
+			}
 		}
 	case "]":
 		if m.screen == portfolioScreen && m.portfolioCol < len(portfolioColumns)-1 {
@@ -510,6 +617,34 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case "c":
 		m.currency = (m.currency + 1) % 2
 		m.notice = "통화 표시: " + m.currencyName()
+	case "e":
+		if m.screen == allocationScreen && m.cursor < len(m.allocation.Rows) {
+			m.allocationEditing = true
+			m.allocationInput = ""
+			return m, nil
+		}
+	case "a":
+		if m.screen == allocationScreen {
+			m.allocationAdding, m.allocationInput = true, ""
+			m.notice = "추가할 종목의 티커 또는 코드를 입력하세요"
+			return m, nil
+		}
+	case "r":
+		if m.screen == allocationScreen {
+			for i := range m.allocation.Rows {
+				m.allocation.Rows[i].Target.TargetPercent = m.allocation.Rows[i].CurrentPercent.Round(2)
+			}
+			m.notice = "현재 비중을 목표로 복사했습니다"
+		}
+	case "s":
+		if m.screen == allocationScreen {
+			return m, m.saveAllocationCmd()
+		}
+	case "d":
+		if m.screen == allocationScreen && m.cursor < len(m.allocation.Rows) {
+			m.allocation.Rows[m.cursor].Target.TargetPercent = decimal.Zero
+			m.notice = "목표 비중을 0%로 변경했습니다"
+		}
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
@@ -529,6 +664,11 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			m.cursor = min(count-1, m.cursor+max(1, m.height/2))
 		}
 	case "enter":
+		if m.screen == allocationScreen && m.cursor < len(m.allocation.Rows) {
+			m.allocationEditing = true
+			m.allocationInput = ""
+			return m, nil
+		}
 		if symbol, ok := m.currentSymbol(); ok {
 			m.previous, m.screen, m.selected, m.loading, m.detailQuote = m.screen, detailScreen, symbol, true, m.snapshot.Quotes[symbol.Key()]
 			return m, tea.Batch(m.candlesCmd(symbol), m.quoteCmd(symbol))
@@ -589,6 +729,9 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 			m.screen, m.cursor, m.dividendLoading = dividendScreen, 0, true
 			m.dividendHoldingsKey = dividendHoldingsKey(m.snapshot.Positions)
 			return m, m.dividendCmd()
+		case "8":
+			m.screen, m.cursor = allocationScreen, 0
+			return m, m.allocationCmd()
 		case "/":
 			m.searchEditing = true
 		case "left", "h":
@@ -649,7 +792,7 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) nextPrimaryScreen(delta int) {
-	screens := []screen{dashboardScreen, portfolioScreen, searchScreen, watchlistScreen, moversScreen, performanceScreen, dividendScreen}
+	screens := []screen{dashboardScreen, portfolioScreen, searchScreen, watchlistScreen, moversScreen, performanceScreen, dividendScreen, allocationScreen}
 	current := 0
 	for i, candidate := range screens {
 		if m.screen == candidate {
@@ -815,6 +958,8 @@ func (m Model) itemCount() int {
 		return len(m.performancePoints())
 	case dividendScreen:
 		return len(m.dividends.Holdings)
+	case allocationScreen:
+		return len(m.allocation.Rows)
 	}
 	return 0
 }
@@ -881,12 +1026,15 @@ var (
 )
 
 func (m Model) header() string {
-	labels := []string{"1 현황", "2 내 주식", "3 검색", "4 관심", "5 급등", "6 성과", "7 배당"}
+	labels := []string{"1 현황", "2 내 주식", "3 검색", "4 관심", "5 급등", "6 성과", "7 배당", "8 비중"}
+	if m.width < 110 {
+		labels = []string{"1현황", "2주식", "3검색", "4관심", "5급등", "6성과", "7배당", "8비중"}
+	}
 	active := m.screen
 	if active == detailScreen || active == helpScreen || active == diagnosticsScreen {
 		active = m.previous
 	}
-	if active < dashboardScreen || active > dividendScreen {
+	if active < dashboardScreen || active > allocationScreen {
 		active = dashboardScreen
 	}
 	tabs := make([]string, len(labels))
@@ -920,6 +1068,8 @@ func (m Model) body() string {
 		body = m.performanceView()
 	case dividendScreen:
 		body = m.dividendView()
+	case allocationScreen:
+		body = m.allocationView()
 	case detailScreen:
 		body = m.detailView()
 	case helpScreen:
@@ -1841,6 +1991,100 @@ func dividendHoldingsKey(positions []domain.Position) string {
 	return strings.Join(parts, "|")
 }
 
+func (m Model) allocationScopeName() string {
+	return []string{"ALL", string(domain.BrokerNH), string(domain.BrokerKiwoom)}[m.allocationScope%3]
+}
+func (m Model) allocationScopeLabel() string {
+	return []string{"통합", "NH", "키움"}[m.allocationScope%3]
+}
+
+func (m Model) handleAllocationInput(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc":
+		m.allocationEditing, m.allocationAdding = false, false
+		m.allocationInput = ""
+	case "backspace":
+		if len(m.allocationInput) > 0 {
+			_, size := utf8.DecodeLastRuneInString(m.allocationInput)
+			m.allocationInput = m.allocationInput[:len(m.allocationInput)-size]
+		}
+	case "enter":
+		if m.allocationAdding {
+			query := strings.TrimSpace(m.allocationInput)
+			if query == "" {
+				m.notice = "종목 티커 또는 코드를 입력하세요"
+				return m, nil
+			}
+			m.allocationAdding, m.allocationInput = false, ""
+			return m, m.allocationSymbolCmd(query)
+		}
+		value, err := decimal.NewFromString(m.allocationInput)
+		if err != nil || value.IsNegative() || value.GreaterThan(decimal.NewFromInt(100)) {
+			m.notice = "0~100 사이 숫자를 입력하세요"
+			return m, nil
+		}
+		m.allocation.Rows[m.cursor].Target.TargetPercent = value
+		m.allocationEditing = false
+		m.allocationInput = ""
+	default:
+		if m.allocationAdding && utf8.RuneCountInString(key) == 1 {
+			m.allocationInput += key
+		} else if (key >= "0" && key <= "9") || key == "." {
+			m.allocationInput += key
+		}
+	}
+	return m, nil
+}
+
+func (m Model) allocationView() string {
+	targetTotal := decimal.Zero
+	for _, row := range m.allocation.Rows {
+		targetTotal = targetTotal.Add(row.Target.TargetPercent)
+	}
+	lines := []string{"목표 비중과 리밸런싱 조회 · " + m.allocationScopeLabel(), muted.Render(" 통합 / NH / 키움   Tab: 범위 전환"), "", fmt.Sprintf("  총자산 %s원    목표 합계 %s%%", money(m.allocation.TotalKRW), m.allocation.TargetTotal.StringFixed(2)), fmt.Sprintf("  시장  한국 %.1f%% · 미국 %.1f%% · 현금/기타 %.1f%%", m.allocation.KRMarketPercent.InexactFloat64(), m.allocation.USMarketPercent.InexactFloat64(), m.allocation.OtherMarketPercent.InexactFloat64()), fmt.Sprintf("  통화  KRW %.1f%% · USD %.1f%%", m.allocation.KRWPercent.InexactFloat64(), m.allocation.USDPercent.InexactFloat64()), "", "  종목             목표       현재       편차       상태"}
+	lines[3] = fmt.Sprintf("  총자산 %s원    목표 합계 %s%%", money(m.allocation.TotalKRW), targetTotal.StringFixed(2))
+	if m.allocationAdding {
+		lines = append(lines, selected.Render("  종목 추가: "+m.allocationInput+"_"), "")
+	}
+	for i, row := range m.allocation.Rows {
+		name := row.Target.Symbol.Ticker
+		if row.Target.Symbol.Code == "OTHER" {
+			name = row.Target.Symbol.Name
+		}
+		if name == "" {
+			name = row.Target.Symbol.Code
+		}
+		if row.Target.Cash {
+			name = "현금"
+		}
+		target := row.Target.TargetPercent.StringFixed(2) + "%"
+		if m.allocationEditing && i == m.cursor {
+			target = "[" + m.allocationInput + "]%"
+		}
+		difference := row.CurrentPercent.Sub(row.Target.TargetPercent)
+		line := fmt.Sprintf("  %s %s %s %s %s", fitCell(name, 12, false), fitCell(target, 10, true), fitCell(row.CurrentPercent.StringFixed(2)+"%", 10, true), fitCell(signedPercent(difference), 10, true), allocationStatus(difference))
+		if i == m.cursor {
+			line = selected.Render(line)
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "", muted.Render("Enter/e 목표 입력 · a 종목 추가 · d 0% · r 현재비중 복사 · s 저장"), muted.Render("※ 조회 전용이며 주문·매매 수량을 제안하거나 실행하지 않습니다."))
+	return panel.Width(max(76, m.width-4)).Render(strings.Join(lines, "\n"))
+}
+
+func allocationStatus(difference decimal.Decimal) string {
+	if difference.GreaterThan(decimal.NewFromInt(5)) {
+		return "집중"
+	}
+	if difference.GreaterThan(decimal.NewFromInt(2)) {
+		return "초과"
+	}
+	if difference.LessThan(decimal.NewFromInt(-2)) {
+		return "부족"
+	}
+	return "적정"
+}
+
 func (m Model) detailView() string {
 	interval := intervals[m.intervalIndex]
 	if m.loading {
@@ -1902,7 +2146,7 @@ func detailAnalysis(q domain.Quote) string {
 }
 
 func (m Model) helpView() string {
-	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\n←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지\ngt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n1~7 주요 화면 이동  ? 도움말\n\n내 주식\nTab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동\nt 기본순서→수익률→보유비중 정렬\n\n성과\nTab 표·그래프 전환    그래프에서 t 일·주·월·연 전환\n\n배당\n최근 12개월 기준 연간·월별 예상 배당과 세전·세후·원화 조회\nTab 종목별·월별 화면 전환\n\n상세 차트\nh/l 또는 ←/→ 봉 단위 변경\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
+	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\n←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지\ngt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n1~8 주요 화면 이동  ? 도움말\n\n내 주식\nTab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동\nt 기본순서→수익률→보유비중 정렬\n\n성과\nTab 표·그래프 전환    그래프에서 t 일·주·월·연 전환\n\n배당\n최근 12개월 기준 연간·월별 예상 배당과 세전·세후·원화 조회\nTab 종목별·월별 화면 전환\n\n목표 비중\nTab 통합·NH·키움 전환    Enter/e 편집    a 종목 추가    r 현재비중 복사    s 저장\n\n상세 차트\nh/l 또는 ←/→ 봉 단위 변경\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
 }
 
 func (m Model) diagnosticsView() string {
@@ -1936,6 +2180,8 @@ func (m Model) footer() string {
 		base = " Tab 표/그래프  t 일/주/월/연  : 명령  ? 도움말"
 	} else if m.screen == dividendScreen {
 		base = " Tab 종목별/월별  : 명령  ? 도움말"
+	} else if m.screen == allocationScreen {
+		base = " Tab 범위  Enter/e 편집  a 추가  r 복사  s 저장  ? 도움말"
 	}
 	return muted.Render(base) + "  │  " + m.connectionIndicator()
 }

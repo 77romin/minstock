@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/77romin/minstock-tui/internal/domain"
+	"github.com/shopspring/decimal"
 	_ "modernc.org/sqlite"
 )
 
@@ -123,6 +124,19 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshots (
   profit_loss_krw TEXT NOT NULL,
   exchange_rate TEXT NOT NULL,
   PRIMARY KEY(snapshot_date, provider, account_ref, currency)
+);
+CREATE TABLE IF NOT EXISTS allocation_targets (
+  scope TEXT NOT NULL,
+  asset_key TEXT NOT NULL,
+  market TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  ticker TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  currency TEXT NOT NULL,
+  is_cash INTEGER NOT NULL DEFAULT 0,
+  target_percent TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(scope, asset_key)
 );`
 	if _, err := r.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate sqlite: %w", err)
@@ -145,8 +159,58 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshots (
 		return fmt.Errorf("remove legacy demo watchlists: %w", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?),(2, ?),(3, ?),(4, ?),(5, ?),(6, ?)`, now, now, now, now, now, now)
+	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?),(2, ?),(3, ?),(4, ?),(5, ?),(6, ?),(7, ?)`, now, now, now, now, now, now, now)
 	return err
+}
+
+func (r *Repository) ListAllocationTargets(ctx context.Context, scope string) ([]domain.AllocationTarget, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT market,symbol,ticker,display_name,currency,is_cash,target_percent,updated_at FROM allocation_targets WHERE scope=? ORDER BY is_cash,symbol`, scope)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []domain.AllocationTarget
+	for rows.Next() {
+		var item domain.AllocationTarget
+		var market, currency, percent, updated string
+		var cash int
+		item.Scope = scope
+		if err := rows.Scan(&market, &item.Symbol.Code, &item.Symbol.Ticker, &item.Symbol.Name, &currency, &cash, &percent, &updated); err != nil {
+			return nil, err
+		}
+		item.Symbol.Market, item.Symbol.Currency, item.Cash = domain.Market(market), domain.Currency(currency), cash == 1
+		item.TargetPercent, err = decimal.NewFromString(percent)
+		if err != nil {
+			return nil, err
+		}
+		item.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (r *Repository) ReplaceAllocationTargets(ctx context.Context, scope string, targets []domain.AllocationTarget) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM allocation_targets WHERE scope=?`, scope); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, item := range targets {
+		key := item.Symbol.Key()
+		if item.Cash {
+			key = "CASH"
+		} else if item.Symbol.Code == "OTHER" {
+			key = "OTHER"
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO allocation_targets(scope,asset_key,market,symbol,ticker,display_name,currency,is_cash,target_percent,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, scope, key, item.Symbol.Market, item.Symbol.Code, item.Symbol.Ticker, item.Symbol.Name, item.Symbol.Currency, item.Cash, item.TargetPercent.String(), now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (r *Repository) SaveCache(ctx context.Context, key string, payload []byte) error {

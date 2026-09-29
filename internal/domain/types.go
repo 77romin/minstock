@@ -121,6 +121,14 @@ type DividendEvent struct {
 	Freshness       Freshness
 }
 
+type AllocationTarget struct {
+	Scope         string
+	Symbol        Symbol
+	Cash          bool
+	TargetPercent decimal.Decimal
+	UpdatedAt     time.Time
+}
+
 type Position struct {
 	AccountID     string
 	Broker        BrokerID
