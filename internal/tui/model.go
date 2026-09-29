@@ -26,6 +26,7 @@ const (
 	performanceScreen
 	dividendScreen
 	allocationScreen
+	alertScreen
 	detailScreen
 	helpScreen
 	diagnosticsScreen
@@ -58,6 +59,13 @@ type dividendDisplay int
 const (
 	dividendHoldings dividendDisplay = iota
 	dividendCalendar
+)
+
+type alertDisplay int
+
+const (
+	alertHistory alertDisplay = iota
+	alertRules
 )
 
 type performancePeriod int
@@ -119,6 +127,10 @@ type Model struct {
 	allocationPending   bool
 	allocationDirty     bool
 	allocationInput     string
+	alerts              app.AlertReport
+	alertDisplay        alertDisplay
+	alertAdding         bool
+	alertInput          string
 }
 
 type cachedDashboardMsg struct {
@@ -145,6 +157,11 @@ type allocationSymbolMsg struct {
 	symbol domain.Symbol
 	err    error
 }
+type alertMsg struct {
+	report app.AlertReport
+	err    error
+}
+type alertActionMsg struct{ err error }
 type searchMsg struct {
 	query   string
 	results []domain.Symbol
@@ -173,7 +190,7 @@ func New(service *app.Service, mode string, refreshEvery time.Duration) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.cachedDashboardCmd(), m.dashboardCmd(), m.performanceCmd(), m.tickCmd())
+	return tea.Batch(m.cachedDashboardCmd(), m.dashboardCmd(), m.performanceCmd(), m.alertCmd(), m.tickCmd())
 }
 
 func (m Model) cachedDashboardCmd() tea.Cmd {
@@ -249,6 +266,95 @@ func (m Model) saveAllocationCmd() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return allocationSavedMsg{m.service.SaveAllocationTargets(ctx, scope, targets)}
+	}
+}
+
+func (m Model) alertCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		report, err := m.service.AlertReport(ctx)
+		return alertMsg{report: report, err: err}
+	}
+}
+
+func (m Model) evaluateAlertsCmd(snapshot app.Snapshot) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.service.EvaluateAlerts(ctx, snapshot); err != nil {
+			return alertMsg{err: err}
+		}
+		report, err := m.service.AlertReport(ctx)
+		return alertMsg{report: report, err: err}
+	}
+}
+
+func (m Model) savePriceAlertCmd(input string) tea.Cmd {
+	snapshot := m.snapshot
+	return func() tea.Msg {
+		fields := strings.Fields(input)
+		if len(fields) != 2 {
+			return alertActionMsg{err: fmt.Errorf("입력 형식: 티커 목표가 (예: VOO 700)")}
+		}
+		target, err := decimal.NewFromString(strings.ReplaceAll(fields[1], ",", ""))
+		if err != nil || !target.IsPositive() {
+			return alertActionMsg{err: fmt.Errorf("목표가는 0보다 큰 숫자여야 합니다")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		results, err := m.service.Search(ctx, fields[0])
+		if err != nil {
+			return alertActionMsg{err: err}
+		}
+		query := strings.ToUpper(fields[0])
+		var symbol domain.Symbol
+		for _, candidate := range results {
+			if strings.ToUpper(candidate.Ticker) == query || strings.ToUpper(candidate.Code) == query {
+				symbol = candidate
+				break
+			}
+		}
+		if symbol.Code == "" && len(results) > 0 {
+			symbol = results[0]
+		}
+		if symbol.Code == "" {
+			return alertActionMsg{err: fmt.Errorf("종목 %q을 찾지 못했습니다", fields[0])}
+		}
+		current := snapshot.Quotes[symbol.Key()].Price
+		if current.IsZero() {
+			for _, position := range snapshot.Positions {
+				if position.Symbol.Key() == symbol.Key() {
+					current = position.CurrentPrice
+					break
+				}
+			}
+		}
+		return alertActionMsg{err: m.service.SavePriceAlert(ctx, symbol, target, current)}
+	}
+}
+
+func (m Model) deletePriceAlertCmd(id int64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return alertActionMsg{err: m.service.DeletePriceAlert(ctx, id)}
+	}
+}
+
+func (m Model) acknowledgeAlertCmd(id int64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return alertActionMsg{err: m.service.AcknowledgeAlert(ctx, id)}
+	}
+}
+
+func (m Model) acknowledgeAllAlertsCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return alertActionMsg{err: m.service.AcknowledgeAllAlerts(ctx)}
 	}
 }
 
@@ -363,6 +469,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case enrichmentMsg:
 		m.snapshot, m.enriching = msg.snapshot, false
 		m.notice = "최신 데이터"
+		return m, m.evaluateAlertsCmd(msg.snapshot)
 	case performanceMsg:
 		if msg.err == nil {
 			m.history = msg.history
@@ -374,6 +481,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cachedDividendMsg:
 		if msg.holdingsKey == m.dividendHoldingsKey && len(m.dividends.Holdings) == 0 && len(msg.report.Holdings) > 0 {
 			m.dividends = msg.report
+		}
+	case alertMsg:
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.alerts = msg.report
+			if m.screen == alertScreen && m.cursor >= m.itemCount() {
+				m.cursor = max(0, m.itemCount()-1)
+			}
+		}
+	case alertActionMsg:
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.alertAdding, m.alertInput = false, ""
+			m.notice = "알림 설정을 갱신했습니다"
+			return m, m.alertCmd()
 		}
 	case allocationMsg:
 		if msg.report.Scope != "" && msg.report.Scope != m.allocationScopeName() {
@@ -464,6 +588,9 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	}
 	if m.screen == allocationScreen && (m.allocationEditing || m.allocationAdding) {
 		return m.handleAllocationInput(key)
+	}
+	if m.screen == alertScreen && m.alertAdding {
+		return m.handleAlertInput(key)
 	}
 	if !m.commandMode && !m.searchEditing && key == "?" {
 		if m.screen == helpScreen {
@@ -587,6 +714,9 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.allocationCmd()
+	case "9":
+		m.screen, m.cursor = alertScreen, 0
+		return m, m.alertCmd()
 	case "m":
 		return m.toggleWatchlist()
 	case "f":
@@ -613,6 +743,9 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			m.allocationScope = (m.allocationScope + 1) % 3
 			m.cursor = 0
 			return m, m.allocationCmd()
+		} else if m.screen == alertScreen {
+			m.alertDisplay = (m.alertDisplay + 1) % 2
+			m.cursor = 0
 		}
 	case "shift+tab":
 		if m.screen == portfolioScreen {
@@ -631,9 +764,12 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			m.allocationScope = (m.allocationScope + 2) % 3
 			m.cursor = 0
 			return m, m.allocationCmd()
+		} else if m.screen == alertScreen {
+			m.alertDisplay = (m.alertDisplay + 1) % 2
+			m.cursor = 0
 		}
 	case "right", "l":
-		if m.screen >= dashboardScreen && m.screen <= allocationScreen {
+		if m.screen >= dashboardScreen && m.screen <= alertScreen {
 			m.nextPrimaryScreen(1)
 			if m.screen == allocationScreen {
 				if m.allocationDirty {
@@ -643,7 +779,7 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "left", "h":
-		if m.screen >= dashboardScreen && m.screen <= allocationScreen {
+		if m.screen >= dashboardScreen && m.screen <= alertScreen {
 			m.nextPrimaryScreen(-1)
 			if m.screen == allocationScreen {
 				if m.allocationDirty {
@@ -682,6 +818,10 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			m.allocationAdding, m.allocationInput = true, ""
 			m.notice = "추가할 종목의 티커 또는 코드를 입력하세요"
 			return m, nil
+		} else if m.screen == alertScreen && m.alertDisplay == alertRules {
+			m.alertAdding, m.alertInput = true, ""
+			m.notice = "티커와 목표가를 입력하세요 (예: VOO 700)"
+			return m, nil
 		}
 	case "r":
 		if m.screen == allocationScreen {
@@ -698,6 +838,16 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			m.allocation.Rows[m.cursor].Target.TargetPercent = decimal.Zero
 			m.allocationDirty = true
 			m.notice = "목표 비중을 0%로 변경했습니다"
+		} else if m.screen == alertScreen && m.alertDisplay == alertRules && m.cursor < len(m.alerts.Rules) {
+			return m, m.deletePriceAlertCmd(m.alerts.Rules[m.cursor].ID)
+		}
+	case "x":
+		if m.screen == alertScreen && m.alertDisplay == alertHistory && m.cursor < len(m.alerts.Events) {
+			return m, m.acknowledgeAlertCmd(m.alerts.Events[m.cursor].ID)
+		}
+	case "X":
+		if m.screen == alertScreen && m.alertDisplay == alertHistory {
+			return m, m.acknowledgeAllAlertsCmd()
 		}
 	case "u":
 		if m.screen == allocationScreen {
@@ -796,6 +946,9 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, m.allocationCmd()
+		case "9":
+			m.screen, m.cursor = alertScreen, 0
+			return m, m.alertCmd()
 		case "/":
 			m.searchEditing = true
 		case "left", "h":
@@ -856,7 +1009,7 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) nextPrimaryScreen(delta int) {
-	screens := []screen{dashboardScreen, portfolioScreen, searchScreen, watchlistScreen, moversScreen, performanceScreen, dividendScreen, allocationScreen}
+	screens := []screen{dashboardScreen, portfolioScreen, searchScreen, watchlistScreen, moversScreen, performanceScreen, dividendScreen, allocationScreen, alertScreen}
 	current := 0
 	for i, candidate := range screens {
 		if m.screen == candidate {
@@ -1024,6 +1177,11 @@ func (m Model) itemCount() int {
 		return len(m.dividends.Holdings)
 	case allocationScreen:
 		return len(m.allocation.Rows)
+	case alertScreen:
+		if m.alertDisplay == alertRules {
+			return len(m.alerts.Rules)
+		}
+		return len(m.alerts.Events)
 	}
 	return 0
 }
@@ -1090,15 +1248,15 @@ var (
 )
 
 func (m Model) header() string {
-	labels := []string{"1 현황", "2 내 주식", "3 검색", "4 관심", "5 급등", "6 성과", "7 배당", "8 비중"}
+	labels := []string{"1 현황", "2 내 주식", "3 검색", "4 관심", "5 급등", "6 성과", "7 배당", "8 비중", "9 알림"}
 	if m.width < 110 {
-		labels = []string{"1현황", "2주식", "3검색", "4관심", "5급등", "6성과", "7배당", "8비중"}
+		labels = []string{"1현", "2주", "3검", "4관", "5급", "6성", "7배", "8비", "9알"}
 	}
 	active := m.screen
 	if active == detailScreen || active == helpScreen || active == diagnosticsScreen {
 		active = m.previous
 	}
-	if active < dashboardScreen || active > allocationScreen {
+	if active < dashboardScreen || active > alertScreen {
 		active = dashboardScreen
 	}
 	tabs := make([]string, len(labels))
@@ -1134,6 +1292,8 @@ func (m Model) body() string {
 		body = m.dividendView()
 	case allocationScreen:
 		body = m.allocationView()
+	case alertScreen:
+		body = m.alertView()
 	case detailScreen:
 		body = m.detailView()
 	case helpScreen:
@@ -2062,6 +2222,32 @@ func (m Model) allocationScopeLabel() string {
 	return []string{"통합", "NH", "키움"}[m.allocationScope%3]
 }
 
+func (m Model) handleAlertInput(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc":
+		m.alertAdding, m.alertInput = false, ""
+		m.notice = "목표가 입력을 취소했습니다"
+	case "enter":
+		input := strings.TrimSpace(m.alertInput)
+		if input == "" {
+			m.notice = "티커와 목표가를 입력하세요 (예: VOO 700)"
+			return m, nil
+		}
+		m.alertAdding = false
+		return m, m.savePriceAlertCmd(input)
+	case "backspace":
+		if len(m.alertInput) > 0 {
+			_, size := utf8.DecodeLastRuneInString(m.alertInput)
+			m.alertInput = m.alertInput[:len(m.alertInput)-size]
+		}
+	default:
+		if utf8.RuneCountInString(key) == 1 {
+			m.alertInput += key
+		}
+	}
+	return m, nil
+}
+
 func (m Model) handleAllocationInput(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc":
@@ -2172,6 +2358,93 @@ func allocationStatus(difference decimal.Decimal) string {
 	return "적정"
 }
 
+func (m Model) alertView() string {
+	historyTab, rulesTab := " 이력 ", " 규칙 "
+	if m.alertDisplay == alertRules {
+		rulesTab = activeTab.Render(rulesTab)
+	} else {
+		historyTab = activeTab.Render(historyTab)
+	}
+	lines := []string{
+		fmt.Sprintf("가격·수익률 알림 · 미확인 %d건", m.alerts.Unacknowledged),
+		historyTab + "  " + rulesTab + "    Tab: 보기 전환", "",
+		muted.Render("  기본 조건  일간 변동 ±5% · 보유 손실 -10% · 종목 비중 30% · 연결 실패 3회"), "",
+	}
+	if m.alertDisplay == alertRules {
+		if m.alertAdding {
+			lines = append(lines, selected.Render("  목표가 추가: "+m.alertInput+"_"), muted.Render("  형식: 티커 목표가 (예: VOO 700)"), "")
+		}
+		lines = append(lines, "  종목             목표가      방향")
+		if len(m.alerts.Rules) == 0 {
+			lines = append(lines, "", muted.Render("  등록된 목표가 알림이 없습니다. a를 눌러 추가하세요."))
+		}
+		for i, rule := range m.alerts.Rules {
+			direction := "이상 도달"
+			if rule.Direction == "BELOW" {
+				direction = "이하 도달"
+			}
+			unit := "원"
+			if rule.Symbol.Currency == domain.USD {
+				unit = "$"
+			}
+			price := rule.TargetPrice.StringFixed(2) + unit
+			if unit == "$" {
+				price = "$" + rule.TargetPrice.StringFixed(2)
+			}
+			line := fmt.Sprintf("  %s %s %s", fitCell(alertSymbolLabel(rule.Symbol), 14, false), fitCell(price, 12, true), direction)
+			if i == m.cursor {
+				line = selected.Render(line)
+			}
+			lines = append(lines, line)
+		}
+		lines = append(lines, "", muted.Render("a 목표가 추가 · d 선택 규칙 삭제"))
+	} else {
+		lines = append(lines, "  상태  시각              유형       대상        내용")
+		if len(m.alerts.Events) == 0 {
+			lines = append(lines, "", muted.Render("  발생한 알림이 없습니다."))
+		}
+		for i, event := range m.alerts.Events {
+			state := "●"
+			if !event.AcknowledgedAt.IsZero() {
+				state = "○"
+			}
+			line := fmt.Sprintf("  %s  %s  %s %s %s", state, event.OccurredAt.Local().Format("01-02 15:04"), fitCell(alertKindName(event.Kind), 10, false), fitCell(event.Subject, 10, false), trim(event.Message, max(20, m.width-55)))
+			if i == m.cursor {
+				line = selected.Render(line)
+			} else if event.AcknowledgedAt.IsZero() && event.Severity == "위험" {
+				line = negative.Render(line)
+			}
+			lines = append(lines, line)
+		}
+		lines = append(lines, "", muted.Render("x 선택 확인 · X 모두 확인 · 같은 조건은 하루 한 번 기록"))
+	}
+	return panel.Width(max(76, m.width-4)).Render(strings.Join(lines, "\n"))
+}
+
+func alertKindName(kind domain.AlertKind) string {
+	switch kind {
+	case domain.AlertTargetPrice:
+		return "목표가"
+	case domain.AlertDailyChange:
+		return "일간변동"
+	case domain.AlertHoldingLoss:
+		return "보유손실"
+	case domain.AlertAssetWeight:
+		return "비중집중"
+	case domain.AlertConnectionFailed:
+		return "연결실패"
+	default:
+		return string(kind)
+	}
+}
+
+func alertSymbolLabel(symbol domain.Symbol) string {
+	if ticker := strings.TrimSpace(symbol.Ticker); ticker != "" {
+		return strings.ToUpper(ticker)
+	}
+	return strings.ToUpper(strings.TrimSpace(symbol.Code))
+}
+
 func (m Model) detailView() string {
 	interval := intervals[m.intervalIndex]
 	if m.loading {
@@ -2233,7 +2506,39 @@ func detailAnalysis(q domain.Quote) string {
 }
 
 func (m Model) helpView() string {
-	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\n←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지\ngt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n1~8 주요 화면 이동  ? 도움말\n\n내 주식\nTab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동\nt 기본순서→수익률→보유비중 정렬\n\n성과\nTab 표·그래프 전환    그래프에서 t 일·주·월·연 전환\n\n배당\n최근 12개월 기준 연간·월별 예상 배당과 세전·세후·원화 조회\nTab 종목별·월별 화면 전환\n\n목표 비중\nTab 통합·NH·키움 전환    Enter/e 편집    a 종목 추가    r 현재비중 복사    s 저장    u 되돌리기\n\n상세 차트\nh/l 또는 ←/→ 봉 단위 변경\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
+	return panel.Render(`Vim 단축키
+
+↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소
+←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지
+gt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글
+f 시장 필터/보유탭  c USD/KRW 표시 전환
+1~9 주요 화면 이동  ? 도움말
+
+내 주식
+Tab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동
+t 기본순서→수익률→보유비중 정렬
+
+성과
+Tab 표·그래프 전환    그래프에서 t 일·주·월·연 전환
+
+배당
+최근 12개월 기준 연간·월별 예상 배당과 세전·세후·원화 조회
+Tab 종목별·월별 화면 전환
+
+목표 비중
+Tab 통합·NH·키움 전환    Enter/e 편집    a 종목 추가    r 현재비중 복사    s 저장    u 되돌리기
+
+알림
+Tab 이력·목표가 규칙 전환    a 목표가 추가    d 규칙 삭제    x/X 확인/모두 확인
+
+상세 차트
+h/l 또는 ←/→ 봉 단위 변경
+
+콜론 명령
+:r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료
+
+상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120
+조회 전용: 주문 기능 및 주문 API 호출 없음`)
 }
 
 func (m Model) diagnosticsView() string {
@@ -2269,6 +2574,12 @@ func (m Model) footer() string {
 		base = " Tab 종목별/월별  : 명령  ? 도움말"
 	} else if m.screen == allocationScreen {
 		base = " Tab 범위  Enter/e 편집  a 추가  r 복사  s 저장  u 취소  ? 도움말"
+	} else if m.screen == alertScreen {
+		if m.alertDisplay == alertRules {
+			base = " Tab 이력/규칙  a 목표가 추가  d 삭제  ? 도움말"
+		} else {
+			base = " Tab 이력/규칙  x 확인  X 모두 확인  ? 도움말"
+		}
 	}
 	return muted.Render(base) + "  │  " + m.connectionIndicator()
 }

@@ -129,6 +129,38 @@ type AllocationTarget struct {
 	UpdatedAt     time.Time
 }
 
+type AlertKind string
+
+const (
+	AlertTargetPrice      AlertKind = "TARGET_PRICE"
+	AlertDailyChange      AlertKind = "DAILY_CHANGE"
+	AlertHoldingLoss      AlertKind = "HOLDING_LOSS"
+	AlertAssetWeight      AlertKind = "ASSET_WEIGHT"
+	AlertConnectionFailed AlertKind = "CONNECTION_FAILED"
+)
+
+type PriceAlertRule struct {
+	ID          int64
+	Symbol      Symbol
+	TargetPrice decimal.Decimal
+	Direction   string
+	Enabled     bool
+	CreatedAt   time.Time
+}
+
+type AlertEvent struct {
+	ID             int64
+	Kind           AlertKind
+	Severity       string
+	Subject        string
+	Message        string
+	Value          decimal.Decimal
+	Threshold      decimal.Decimal
+	DedupeKey      string
+	OccurredAt     time.Time
+	AcknowledgedAt time.Time
+}
+
 type Position struct {
 	AccountID     string
 	Broker        BrokerID

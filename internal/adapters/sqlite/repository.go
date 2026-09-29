@@ -137,6 +137,32 @@ CREATE TABLE IF NOT EXISTS allocation_targets (
   target_percent TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   PRIMARY KEY(scope, asset_key)
+);
+CREATE TABLE IF NOT EXISTS price_alert_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  asset_key TEXT NOT NULL UNIQUE,
+  market TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  ticker TEXT NOT NULL DEFAULT '',
+  display_name TEXT NOT NULL DEFAULT '',
+  currency TEXT NOT NULL DEFAULT 'KRW',
+  exchange_code TEXT NOT NULL DEFAULT '',
+  target_price TEXT NOT NULL,
+  direction TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS alert_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  message TEXT NOT NULL,
+  value TEXT NOT NULL,
+  threshold_value TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL UNIQUE,
+  occurred_at TEXT NOT NULL,
+  acknowledged_at TEXT
 );`
 	if _, err := r.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate sqlite: %w", err)
@@ -159,7 +185,7 @@ CREATE TABLE IF NOT EXISTS allocation_targets (
 		return fmt.Errorf("remove legacy demo watchlists: %w", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?),(2, ?),(3, ?),(4, ?),(5, ?),(6, ?),(7, ?)`, now, now, now, now, now, now, now)
+	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?),(2, ?),(3, ?),(4, ?),(5, ?),(6, ?),(7, ?),(8, ?)`, now, now, now, now, now, now, now, now)
 	return err
 }
 
@@ -211,6 +237,102 @@ func (r *Repository) ReplaceAllocationTargets(ctx context.Context, scope string,
 		}
 	}
 	return tx.Commit()
+}
+
+func (r *Repository) ListPriceAlertRules(ctx context.Context) ([]domain.PriceAlertRule, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id,market,symbol,ticker,display_name,currency,exchange_code,target_price,direction,enabled,created_at FROM price_alert_rules ORDER BY ticker,symbol`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []domain.PriceAlertRule
+	for rows.Next() {
+		var item domain.PriceAlertRule
+		var market, currency, target, created string
+		var enabled int
+		if err := rows.Scan(&item.ID, &market, &item.Symbol.Code, &item.Symbol.Ticker, &item.Symbol.Name, &currency, &item.Symbol.Exchange, &target, &item.Direction, &enabled, &created); err != nil {
+			return nil, err
+		}
+		item.Symbol.Market, item.Symbol.Currency, item.Enabled = domain.Market(market), domain.Currency(currency), enabled == 1
+		item.TargetPrice, err = decimal.NewFromString(target)
+		if err != nil {
+			return nil, err
+		}
+		item.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (r *Repository) SavePriceAlertRule(ctx context.Context, item domain.PriceAlertRule) error {
+	createdAt := item.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	_, err := r.db.ExecContext(ctx, `INSERT INTO price_alert_rules(asset_key,market,symbol,ticker,display_name,currency,exchange_code,target_price,direction,enabled,created_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(asset_key) DO UPDATE SET market=excluded.market,symbol=excluded.symbol,ticker=excluded.ticker,display_name=excluded.display_name,currency=excluded.currency,exchange_code=excluded.exchange_code,target_price=excluded.target_price,direction=excluded.direction,enabled=excluded.enabled`,
+		item.Symbol.Key(), item.Symbol.Market, item.Symbol.Code, item.Symbol.Ticker, item.Symbol.Name, item.Symbol.Currency, item.Symbol.Exchange, item.TargetPrice.String(), item.Direction, item.Enabled, createdAt.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (r *Repository) DeletePriceAlertRule(ctx context.Context, id int64) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM price_alert_rules WHERE id=?`, id)
+	return err
+}
+
+func (r *Repository) ListAlertEvents(ctx context.Context, limit int) ([]domain.AlertEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT id,kind,severity,subject,message,value,threshold_value,dedupe_key,occurred_at,acknowledged_at FROM alert_events ORDER BY occurred_at DESC,id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []domain.AlertEvent
+	for rows.Next() {
+		var item domain.AlertEvent
+		var value, threshold, occurred string
+		var acknowledged sql.NullString
+		if err := rows.Scan(&item.ID, &item.Kind, &item.Severity, &item.Subject, &item.Message, &value, &threshold, &item.DedupeKey, &occurred, &acknowledged); err != nil {
+			return nil, err
+		}
+		item.Value, err = decimal.NewFromString(value)
+		if err != nil {
+			return nil, err
+		}
+		item.Threshold, err = decimal.NewFromString(threshold)
+		if err != nil {
+			return nil, err
+		}
+		item.OccurredAt, _ = time.Parse(time.RFC3339Nano, occurred)
+		if acknowledged.Valid {
+			item.AcknowledgedAt, _ = time.Parse(time.RFC3339Nano, acknowledged.String)
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (r *Repository) SaveAlertEvent(ctx context.Context, item domain.AlertEvent) error {
+	occurredAt := item.OccurredAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now()
+	}
+	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO alert_events(kind,severity,subject,message,value,threshold_value,dedupe_key,occurred_at) VALUES(?,?,?,?,?,?,?,?)`,
+		item.Kind, item.Severity, item.Subject, item.Message, item.Value.String(), item.Threshold.String(), item.DedupeKey, occurredAt.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (r *Repository) AcknowledgeAlertEvent(ctx context.Context, id int64) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE alert_events SET acknowledged_at=? WHERE id=?`, time.Now().UTC().Format(time.RFC3339Nano), id)
+	return err
+}
+
+func (r *Repository) AcknowledgeAllAlertEvents(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE alert_events SET acknowledged_at=? WHERE acknowledged_at IS NULL`, time.Now().UTC().Format(time.RFC3339Nano))
+	return err
 }
 
 func (r *Repository) SaveCache(ctx context.Context, key string, payload []byte) error {

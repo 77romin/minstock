@@ -137,6 +137,55 @@ func TestDividendScreenNavigation(t *testing.T) {
 	}
 }
 
+func TestAlertScreenNavigationAndRuleInput(t *testing.T) {
+	m := Model{screen: dashboardScreen}
+	next, cmd := m.handleKey("9")
+	m = next.(Model)
+	if m.screen != alertScreen || cmd == nil {
+		t.Fatalf("alert navigation screen=%v cmd=%v", m.screen, cmd)
+	}
+	next, _ = m.handleKey("tab")
+	m = next.(Model)
+	if m.alertDisplay != alertRules {
+		t.Fatalf("alert tab display=%v", m.alertDisplay)
+	}
+	next, _ = m.handleKey("a")
+	m = next.(Model)
+	for _, key := range []string{"V", "O", "O", " ", "7", "0", "0"} {
+		next, _ = m.handleKey(key)
+		m = next.(Model)
+	}
+	next, cmd = m.handleKey("enter")
+	m = next.(Model)
+	if m.alertAdding || m.alertInput != "VOO 700" || cmd == nil {
+		t.Fatalf("alert input adding=%v input=%q cmd=%v", m.alertAdding, m.alertInput, cmd)
+	}
+}
+
+func TestAlertViewShowsHistoryAndRules(t *testing.T) {
+	now := time.Now()
+	m := Model{width: 120, screen: alertScreen, alerts: app.AlertReport{
+		Unacknowledged: 1,
+		Events:         []domain.AlertEvent{{Kind: domain.AlertHoldingLoss, Severity: "위험", Subject: "QLD", Message: "보유 손실률 -12.00%", OccurredAt: now}},
+		Rules:          []domain.PriceAlertRule{{Symbol: domain.Symbol{Ticker: "VOO", Currency: domain.USD}, TargetPrice: decimal.NewFromInt(700), Direction: "ABOVE"}},
+	}}
+	if view := m.alertView(); !strings.Contains(view, "미확인 1건") || !strings.Contains(view, "보유손실") || !strings.Contains(view, "QLD") {
+		t.Fatalf("alert history missing: %q", view)
+	}
+	m.alertDisplay = alertRules
+	if view := m.alertView(); !strings.Contains(view, "VOO") || !strings.Contains(view, "$700.00") || !strings.Contains(view, "이상 도달") {
+		t.Fatalf("alert rules missing: %q", view)
+	}
+}
+
+func TestNarrowHeaderFitsWithAlertTab(t *testing.T) {
+	m := Model{width: 80, mode: "connected", screen: alertScreen}
+	header := m.header()
+	if width := lipgloss.Width(header); width > 80 || !strings.Contains(header, "9알") {
+		t.Fatalf("narrow header width=%d header=%q", width, header)
+	}
+}
+
 func TestDividendScreenKeepsPreloadedCacheVisibleWhileRefreshing(t *testing.T) {
 	m := Model{
 		screen:    dashboardScreen,

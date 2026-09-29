@@ -65,6 +65,13 @@ type Repository interface {
 	ListPortfolioSnapshots(context.Context, time.Time, time.Time) ([]domain.PortfolioSnapshot, error)
 	ListAllocationTargets(context.Context, string) ([]domain.AllocationTarget, error)
 	ReplaceAllocationTargets(context.Context, string, []domain.AllocationTarget) error
+	ListPriceAlertRules(context.Context) ([]domain.PriceAlertRule, error)
+	SavePriceAlertRule(context.Context, domain.PriceAlertRule) error
+	DeletePriceAlertRule(context.Context, int64) error
+	ListAlertEvents(context.Context, int) ([]domain.AlertEvent, error)
+	SaveAlertEvent(context.Context, domain.AlertEvent) error
+	AcknowledgeAlertEvent(context.Context, int64) error
+	AcknowledgeAllAlertEvents(context.Context) error
 	SaveCandles(context.Context, []domain.Candle) error
 	LoadCandles(context.Context, domain.CandleQuery) ([]domain.Candle, error)
 	Close() error

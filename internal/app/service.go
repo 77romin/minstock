@@ -23,6 +23,8 @@ type Service struct {
 	dividends   ports.DividendProvider
 	dividendMu  sync.Mutex
 	dividendRun map[string]*dividendCall
+	alertMu     sync.Mutex
+	alertFails  map[domain.BrokerID]int
 }
 
 type Snapshot struct {
