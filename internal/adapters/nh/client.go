@@ -222,7 +222,8 @@ type balanceEnvelope struct {
 func (c *Client) fetchBalance(ctx context.Context, accountID string) (balanceEnvelope, error) {
 	c.balanceMu.Lock()
 	defer c.balanceMu.Unlock()
-	if cached, ok := c.balances[accountID]; ok && time.Since(cached.fetchedAt) < 5*time.Second {
+	cached, hasCached := c.balances[accountID]
+	if hasCached && time.Since(cached.fetchedAt) < 5*time.Second {
 		return cached.value, nil
 	}
 	var out balanceEnvelope
@@ -232,6 +233,10 @@ func (c *Client) fetchBalance(ctx context.Context, accountID string) (balanceEnv
 	}, &out)
 	if err == nil {
 		c.balances[accountID] = cachedBalance{value: out, fetchedAt: time.Now()}
+	} else if hasCached {
+		// A transient refresh failure must not erase a previously displayed
+		// account. Keep the last successful read until NH recovers.
+		return cached.value, nil
 	}
 	return out, err
 }
@@ -294,7 +299,8 @@ func (c *Client) Positions(ctx context.Context, accountID string) ([]domain.Posi
 func (c *Client) fetchForeignBalance(ctx context.Context, accountID string) (balanceEnvelope, error) {
 	c.balanceMu.Lock()
 	defer c.balanceMu.Unlock()
-	if cached, ok := c.foreignBalances[accountID]; ok && time.Since(cached.fetchedAt) < 5*time.Second {
+	cached, hasCached := c.foreignBalances[accountID]
+	if hasCached && time.Since(cached.fetchedAt) < 5*time.Second {
 		return cached.value, nil
 	}
 	var out balanceEnvelope
@@ -304,6 +310,11 @@ func (c *Client) fetchForeignBalance(ctx context.Context, accountID string) (bal
 	}, &out)
 	if err == nil {
 		c.foreignBalances[accountID] = cachedBalance{value: out, fetchedAt: time.Now()}
+	} else if hasCached {
+		// NH can intermittently reject or time out a refresh, especially when
+		// another minstock process is polling the same account. Preserve the
+		// last good overseas ledger instead of replacing the dashboard with $0.
+		return cached.value, nil
 	}
 	return out, err
 }

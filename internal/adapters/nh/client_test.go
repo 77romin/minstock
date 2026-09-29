@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/77romin/minstock-tui/internal/domain"
 	"github.com/77romin/minstock-tui/internal/security"
@@ -44,6 +45,7 @@ func TestAccountsContract(t *testing.T) {
 func TestBalanceAndPositionsUseCurrentContractAndShareResponse(t *testing.T) {
 	var balanceCalls atomic.Int32
 	var foreignBalanceCalls atomic.Int32
+	var foreignRefreshFails atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/oauth2/token":
@@ -66,6 +68,10 @@ func TestBalanceAndPositionsUseCurrentContractAndShareResponse(t *testing.T) {
 			})
 		case "/gbstock/inquiry/v1/balance":
 			foreignBalanceCalls.Add(1)
+			if foreignRefreshFails.Load() {
+				http.Error(w, "temporary failure", http.StatusServiceUnavailable)
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"rsp_cd": "00000", "rsp_msg": "완료",
 				"Output_0": map[string]string{
@@ -118,5 +124,18 @@ func TestBalanceAndPositionsUseCurrentContractAndShareResponse(t *testing.T) {
 	}
 	if foreignBalanceCalls.Load() != 1 {
 		t.Fatalf("foreign balance endpoint called %d times; want 1", foreignBalanceCalls.Load())
+	}
+	client.balanceMu.Lock()
+	cached := client.foreignBalances["1234567890"]
+	cached.fetchedAt = time.Now().Add(-time.Minute)
+	client.foreignBalances["1234567890"] = cached
+	client.balanceMu.Unlock()
+	foreignRefreshFails.Store(true)
+	staleBalances, err := client.Balances(t.Context(), "1234567890")
+	if err != nil || len(staleBalances) != 2 || !staleBalances[1].ValueTotal.Equal(decimal.NewFromInt(600)) {
+		t.Fatalf("last successful foreign balance was not preserved: %#v %v", staleBalances, err)
+	}
+	if foreignBalanceCalls.Load() != 2 {
+		t.Fatalf("foreign refresh calls=%d; want 2", foreignBalanceCalls.Load())
 	}
 }
