@@ -23,6 +23,7 @@ const (
 	searchScreen
 	watchlistScreen
 	moversScreen
+	performanceScreen
 	detailScreen
 	helpScreen
 	diagnosticsScreen
@@ -58,6 +59,7 @@ type Model struct {
 	loading       bool
 	err           error
 	snapshot      app.Snapshot
+	history       []domain.PortfolioSnapshot
 	query         string
 	results       []domain.Symbol
 	selected      domain.Symbol
@@ -87,6 +89,10 @@ type cachedDashboardMsg struct {
 }
 type dashboardMsg struct{ snapshot app.Snapshot }
 type enrichmentMsg struct{ snapshot app.Snapshot }
+type performanceMsg struct {
+	history []domain.PortfolioSnapshot
+	err     error
+}
 type searchMsg struct {
 	query   string
 	results []domain.Symbol
@@ -115,7 +121,7 @@ func New(service *app.Service, mode string, refreshEvery time.Duration) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.cachedDashboardCmd(), m.dashboardCmd(), m.tickCmd())
+	return tea.Batch(m.cachedDashboardCmd(), m.dashboardCmd(), m.performanceCmd(), m.tickCmd())
 }
 
 func (m Model) cachedDashboardCmd() tea.Cmd {
@@ -140,6 +146,16 @@ func (m Model) dashboardCmd() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		return dashboardMsg{snapshot: m.service.DashboardCore(ctx)}
+	}
+}
+
+func (m Model) performanceCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		to := time.Now()
+		history, err := m.service.PortfolioHistory(ctx, to.AddDate(-1, 0, 0), to)
+		return performanceMsg{history: history, err: err}
 	}
 }
 
@@ -213,10 +229,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.snapshot, m.loading, m.err = msg.snapshot, false, nil
 		m.refreshing, m.enriching, m.liveLoaded = false, true, true
 		m.notice = "계좌 갱신 완료 · 시세 보강 중"
-		return m, m.enrichmentCmd(msg.snapshot)
+		return m, tea.Batch(m.enrichmentCmd(msg.snapshot), m.performanceCmd())
 	case enrichmentMsg:
 		m.snapshot, m.enriching = msg.snapshot, false
 		m.notice = "최신 데이터"
+	case performanceMsg:
+		if msg.err == nil {
+			m.history = msg.history
+		} else {
+			m.err = msg.err
+		}
 	case syncMsg:
 		m.syncing = false
 		if len(msg.errs) > 0 {
@@ -378,6 +400,8 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		m.screen, m.cursor = watchlistScreen, 0
 	case "5":
 		m.screen, m.cursor = moversScreen, 0
+	case "6":
+		m.screen, m.cursor = performanceScreen, 0
 	case "m":
 		return m.toggleWatchlist()
 	case "f":
@@ -396,11 +420,11 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			m.switchPortfolioTab(-1)
 		}
 	case "right", "l":
-		if m.screen >= dashboardScreen && m.screen <= moversScreen {
+		if m.screen >= dashboardScreen && m.screen <= performanceScreen {
 			m.nextPrimaryScreen(1)
 		}
 	case "left", "h":
-		if m.screen >= dashboardScreen && m.screen <= moversScreen {
+		if m.screen >= dashboardScreen && m.screen <= performanceScreen {
 			m.nextPrimaryScreen(-1)
 		}
 	case "]":
@@ -492,6 +516,8 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 			m.screen, m.cursor = watchlistScreen, 0
 		case "5":
 			m.screen, m.cursor = moversScreen, 0
+		case "6":
+			m.screen, m.cursor = performanceScreen, 0
 		case "/":
 			m.searchEditing = true
 		case "left", "h":
@@ -552,7 +578,7 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) nextPrimaryScreen(delta int) {
-	screens := []screen{dashboardScreen, portfolioScreen, searchScreen, watchlistScreen, moversScreen}
+	screens := []screen{dashboardScreen, portfolioScreen, searchScreen, watchlistScreen, moversScreen, performanceScreen}
 	current := 0
 	for i, candidate := range screens {
 		if m.screen == candidate {
@@ -687,6 +713,8 @@ func (m Model) itemCount() int {
 		return len(m.filteredSurges())
 	case searchScreen:
 		return len(m.filteredResults())
+	case performanceScreen:
+		return len(m.performancePoints())
 	}
 	return 0
 }
@@ -752,12 +780,12 @@ var (
 )
 
 func (m Model) header() string {
-	labels := []string{"1 현황", "2 내 주식", "3 검색", "4 관심", "5 급등 분석"}
+	labels := []string{"1 현황", "2 내 주식", "3 검색", "4 관심", "5 급등", "6 성과"}
 	active := m.screen
 	if active == detailScreen || active == helpScreen || active == diagnosticsScreen {
 		active = m.previous
 	}
-	if active < dashboardScreen || active > moversScreen {
+	if active < dashboardScreen || active > performanceScreen {
 		active = dashboardScreen
 	}
 	tabs := make([]string, len(labels))
@@ -787,6 +815,8 @@ func (m Model) body() string {
 		body = m.watchlistView()
 	case moversScreen:
 		body = m.moversView()
+	case performanceScreen:
+		body = m.performanceView()
 	case detailScreen:
 		body = m.detailView()
 	case helpScreen:
@@ -1211,6 +1241,90 @@ func (m Model) moversView() string {
 	return panel.Width(max(60, m.width-4)).Render(strings.Join(lines, "\n"))
 }
 
+type performancePoint struct {
+	Date        time.Time
+	TotalAssets decimal.Decimal
+	ProfitLoss  decimal.Decimal
+}
+
+func aggregatePerformance(history []domain.PortfolioSnapshot) []performancePoint {
+	byDate := make(map[string]performancePoint)
+	for _, snapshot := range history {
+		key := snapshot.Date.In(time.Local).Format("2006-01-02")
+		point := byDate[key]
+		if point.Date.IsZero() {
+			point.Date = snapshot.Date
+		}
+		point.TotalAssets = point.TotalAssets.Add(snapshot.CashKRW).Add(snapshot.ValueTotalKRW)
+		point.ProfitLoss = point.ProfitLoss.Add(snapshot.ProfitLossKRW)
+		byDate[key] = point
+	}
+	result := make([]performancePoint, 0, len(byDate))
+	for _, point := range byDate {
+		result = append(result, point)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Date.Before(result[j].Date) })
+	return result
+}
+
+func (m Model) performancePoints() []performancePoint {
+	return aggregatePerformance(m.history)
+}
+
+func (m Model) performanceView() string {
+	points := m.performancePoints()
+	if len(points) == 0 {
+		return panel.Width(max(60, m.width-4)).Render("포트폴리오 성과\n\n  아직 저장된 일별 스냅샷이 없습니다.\n  계좌 조회가 완료되면 오늘 기록부터 자동으로 저장됩니다.")
+	}
+	latest := points[len(points)-1]
+	change, changeRate := decimal.Zero, decimal.Zero
+	comparison := "비교 기록 필요"
+	if len(points) > 1 {
+		previous := points[len(points)-2]
+		change = latest.TotalAssets.Sub(previous.TotalAssets)
+		if !previous.TotalAssets.IsZero() {
+			changeRate = change.Div(previous.TotalAssets).Mul(decimal.NewFromInt(100))
+		}
+		comparison = fmt.Sprintf("%s (%s)", signedMoney(change)+"원", signedPercent(changeRate))
+	}
+	lines := []string{
+		fmt.Sprintf("포트폴리오 성과 · 원화 기준 · %d일 기록", len(points)), "",
+		fmt.Sprintf("  총자산       %s원", money(latest.TotalAssets)),
+		fmt.Sprintf("  평가손익     %s", signedMoney(latest.ProfitLoss)+"원"),
+		fmt.Sprintf("  전 기록 대비 %s", comparison), "",
+	}
+	wide := m.width >= 110
+	if wide {
+		lines = append(lines, "  날짜             총자산          평가손익          자산 증감       증감률")
+	} else {
+		lines = append(lines, "  날짜             총자산          평가손익       증감률")
+	}
+	start := max(0, len(points)-max(3, m.height-13))
+	for i := start; i < len(points); i++ {
+		point := points[i]
+		deltaText, rateText := "-", "-"
+		if i > 0 {
+			delta := point.TotalAssets.Sub(points[i-1].TotalAssets)
+			rate := decimal.Zero
+			if !points[i-1].TotalAssets.IsZero() {
+				rate = delta.Div(points[i-1].TotalAssets).Mul(decimal.NewFromInt(100))
+			}
+			deltaText, rateText = signedMoney(delta)+"원", signedPercent(rate)
+		}
+		var line string
+		if wide {
+			line = fmt.Sprintf("  %-10s %15s원 %16s %16s %10s",
+				point.Date.In(time.Local).Format("2006-01-02"), money(point.TotalAssets), signedMoney(point.ProfitLoss)+"원", deltaText, rateText)
+		} else {
+			line = fmt.Sprintf("  %-10s %15s원 %16s %10s",
+				point.Date.In(time.Local).Format("2006-01-02"), money(point.TotalAssets), signedMoney(point.ProfitLoss)+"원", rateText)
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "", muted.Render("※ 자산 증감은 입출금을 포함하며 투자 수익률과 다를 수 있습니다."))
+	return panel.Width(max(76, m.width-4)).Render(strings.Join(lines, "\n"))
+}
+
 func (m Model) detailView() string {
 	interval := intervals[m.intervalIndex]
 	if m.loading {
@@ -1272,7 +1386,7 @@ func detailAnalysis(q domain.Quote) string {
 }
 
 func (m Model) helpView() string {
-	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\n←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지\ngt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n? 도움말\n\n내 주식\nTab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동\nt 기본순서→수익률→보유비중 정렬\n상세 차트\nh/l 또는 ←/→ 봉 단위 변경\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
+	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\n←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지\ngt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n1~6 주요 화면 이동  ? 도움말\n\n내 주식\nTab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동\nt 기본순서→수익률→보유비중 정렬\n상세 차트\nh/l 또는 ←/→ 봉 단위 변경\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
 }
 
 func (m Model) diagnosticsView() string {

@@ -317,6 +317,10 @@ func (s *Service) Dashboard(ctx context.Context) Snapshot {
 	return s.EnrichDashboard(ctx, s.DashboardCore(ctx))
 }
 
+func (s *Service) PortfolioHistory(ctx context.Context, from, to time.Time) ([]domain.PortfolioSnapshot, error) {
+	return s.repo.ListPortfolioSnapshots(ctx, from, to)
+}
+
 func (s *Service) Quote(ctx context.Context, symbol domain.Symbol) (domain.Quote, error) {
 	var errs []error
 	for _, provider := range s.providers {

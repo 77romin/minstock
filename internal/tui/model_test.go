@@ -111,6 +111,19 @@ func TestPrimaryScreensSupportHorizontalVimNavigation(t *testing.T) {
 	}
 }
 
+func TestPerformanceScreenNavigation(t *testing.T) {
+	m := Model{screen: dashboardScreen}
+	next, _ := m.handleKey("6")
+	m = next.(Model)
+	if m.screen != performanceScreen {
+		t.Fatalf("6 screen=%v", m.screen)
+	}
+	next, _ = m.handleKey("right")
+	if next.(Model).screen != dashboardScreen {
+		t.Fatalf("performance right must wrap to dashboard: %v", next.(Model).screen)
+	}
+}
+
 func TestPortfolioViewRendersRequestedColumnsAndWeights(t *testing.T) {
 	profit := decimal.NewFromInt(25000)
 	position := domain.Position{
@@ -209,6 +222,39 @@ func TestDashboardIncludesNHUSBalanceWithoutKiwoom(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("NH-only dashboard value %q missing: %q", want, view)
 		}
+	}
+}
+
+func TestPerformanceViewAggregatesCurrenciesByDate(t *testing.T) {
+	loc := time.FixedZone("KST", 9*60*60)
+	day1 := time.Date(2026, 9, 28, 0, 0, 0, 0, loc)
+	day2 := day1.AddDate(0, 0, 1)
+	m := Model{width: 120, height: 30, history: []domain.PortfolioSnapshot{
+		{Date: day1, Broker: domain.BrokerNH, Currency: domain.KRW, CashKRW: decimal.NewFromInt(100), ValueTotalKRW: decimal.NewFromInt(900), ProfitLossKRW: decimal.NewFromInt(50)},
+		{Date: day1, Broker: domain.BrokerNH, Currency: domain.USD, CashKRW: decimal.NewFromInt(140), ValueTotalKRW: decimal.NewFromInt(1260), ProfitLossKRW: decimal.NewFromInt(70)},
+		{Date: day2, Broker: domain.BrokerNH, Currency: domain.KRW, CashKRW: decimal.NewFromInt(100), ValueTotalKRW: decimal.NewFromInt(1000), ProfitLossKRW: decimal.NewFromInt(80)},
+		{Date: day2, Broker: domain.BrokerNH, Currency: domain.USD, CashKRW: decimal.NewFromInt(140), ValueTotalKRW: decimal.NewFromInt(1360), ProfitLossKRW: decimal.NewFromInt(70)},
+	}}
+	points := m.performancePoints()
+	if len(points) != 2 || !points[0].TotalAssets.Equal(decimal.NewFromInt(2400)) || !points[1].TotalAssets.Equal(decimal.NewFromInt(2600)) {
+		t.Fatalf("performance points=%#v", points)
+	}
+	view := m.performanceView()
+	for _, want := range []string{"2일 기록", "2,600원", "+150원", "+200원", "+8.33%", "2026-09-28", "2026-09-29"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("performance value %q missing: %q", want, view)
+		}
+	}
+}
+
+func TestPerformanceViewExplainsSingleDayHistory(t *testing.T) {
+	m := Model{width: 100, height: 24, history: []domain.PortfolioSnapshot{{
+		Date: time.Now(), Broker: domain.BrokerNH, Currency: domain.KRW,
+		CashKRW: decimal.NewFromInt(100), ValueTotalKRW: decimal.NewFromInt(900),
+	}}}
+	view := m.performanceView()
+	if !strings.Contains(view, "1일 기록") || !strings.Contains(view, "비교 기록 필요") {
+		t.Fatalf("single-day guidance missing: %q", view)
 	}
 }
 
