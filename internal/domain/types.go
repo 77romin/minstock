@@ -106,6 +106,21 @@ type PortfolioSnapshot struct {
 	ExchangeRate     decimal.Decimal
 }
 
+// DividendEvent is one cash distribution per share. Future events are limited
+// to distributions already declared by the issuer; projected calendar values
+// are derived separately from trailing payments.
+type DividendEvent struct {
+	Symbol          string
+	ExDate          time.Time
+	DeclarationDate time.Time
+	RecordDate      time.Time
+	PaymentDate     time.Time
+	Amount          decimal.Decimal
+	Currency        Currency
+	Provider        string
+	Freshness       Freshness
+}
+
 type Position struct {
 	AccountID     string
 	Broker        BrokerID

@@ -28,3 +28,14 @@ func TestTokenKeyringRoundTrip(t *testing.T) {
 		t.Fatal("token still exists after deletion")
 	}
 }
+
+func TestAPIKeyKeyringRoundTrip(t *testing.T) {
+	keyring.MockInit()
+	if err := SaveAPIKey("alphavantage", "dividend-key"); err != nil {
+		t.Fatal(err)
+	}
+	value, source, err := LoadAPIKey("alphavantage", "TEST_UNUSED_API_KEY")
+	if err != nil || value != "dividend-key" || source != "os-keyring" {
+		t.Fatalf("value=%q source=%q err=%v", value, source, err)
+	}
+}

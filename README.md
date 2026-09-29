@@ -150,6 +150,7 @@ Bubble Tea의 단방향 상태 흐름 위에 Vim 스타일 이동, 콜론 명령
 - 규칙과 근거가 보이는 급등 후보 분석
 - 일별 총자산·평가손익과 전 기록 대비 증감, 일·주·월·연 선 그래프를 제공하는 성과 화면
 - 실시간·혼합·캐시 상태, 데이터 기준 시각과 USD/KRW 제공 증권사 표시
+- 미국주식·ETF 최근 배당, 연간 세전·세후 예상액, 원화 환산과 월별 예상 캘린더
 - 키움 미국주식 잔고·외화예수금·현재가·차트와 USD/KRW 기준환율
 - OAuth 토큰 자동 갱신, 요청 제한, SQLite 캔들·대시보드 캐시
 - 상세 화면 숫자키 `1`~`4`로 MA5·MA20·MA60·MA120 개별 표시 전환
@@ -211,7 +212,8 @@ TUI 안에서 대부분의 작업을 하므로 옵션은 운영에 필요한 최
 
 | 키 | 동작 |
 |---|---|
-| `1`~`6` | 현황, 내 주식, 검색, 관심종목, 급등 분석, 포트폴리오 성과 이동 |
+| `1`~`7` | 현황, 내 주식, 검색, 관심종목, 급등 분석, 포트폴리오 성과, 배당 이동 |
+| 배당 화면 `Tab` | 종목별 예상액과 향후 12개월 월별 캘린더 전환 |
 | `←`/`→`, `h`/`l` | 이전·다음 기본 화면 이동 |
 | `↑`/`↓`, `j`/`k` | 행 선택 |
 | `Enter` | 선택 종목 상세 차트 |
@@ -297,6 +299,7 @@ TUI 안에서 대부분의 작업을 하므로 옵션은 운영에 필요한 최
 ```sh
 minstock setup kiwoom
 minstock setup nh
+minstock setup dividend
 minstock --diagnose
 minstock sync
 minstock
@@ -309,6 +312,7 @@ export KIWOOM_APP_KEY="..."
 export KIWOOM_APP_SECRET="..."
 export NHPLUG_APP_KEY="..."
 export NHPLUG_APP_SECRET="..."
+export ALPHAVANTAGE_API_KEY="..."
 minstock
 ```
 
@@ -324,6 +328,12 @@ NH 접근 토큰은 약 24시간 동안 유효하며 OS 키링에 만료 시각�
 NH 국내 잔고는 KRX 정규장 기준 필수값(`aly_qut_cd=1`)을 포함해 조회하고, 같은 응답을
 평가금액과 보유종목 변환에 재사용합니다. 미국주식은 NH 해외주식 잔고 API에서 별도로
 조회하여 미국주식 탭에 USD 기준으로 합칩니다.
+
+배당 화면은 [Alpha Vantage `DIVIDENDS`](https://www.alphavantage.co/documentation/) 응답을 사용합니다. 무료 키는 [공식 안내](https://www.alphavantage.co/support/) 기준
+하루 25회 제한이 있으므로 보유 종목별 응답을 SQLite에 24시간 캐시합니다. 연간 예상액은
+최근 12개월 주당 배당 합계에 현재 보유수량을 곱하고, 세후 예상액은 미국 원천징수 15%를
+가정합니다. 원화 환산에는 각 포지션의 증권사 환율만 사용합니다. 아직 선언되지 않은
+미래 지급월은 최근 지급 이력을 1년 뒤로 옮긴 추정치이며 실제 배당을 보장하지 않습니다.
 
 ### 설정 파일
 
@@ -352,6 +362,10 @@ enabled = false
 mode = "mock"
 base_url = "https://moapi.nhplug.com:8443"
 auth_url = "https://api.nhplug.com:8443"
+
+[dividends]
+provider = "alphavantage"
+base_url = "https://www.alphavantage.co/query"
 ```
 
 `setup`으로 자격증명을 저장하면 `enabled = false`여도 해당 증권사를 자동 활성화합니다.

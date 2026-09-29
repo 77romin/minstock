@@ -16,9 +16,12 @@ mode = "mock" # mock | live
 base_url = "https://moapi.nhplug.com:8443"
 auth_url = "https://api.nhplug.com:8443"
 
+[dividends]
+provider = "alphavantage"
+base_url = "https://www.alphavantage.co/query"
+
 [scanner]
 min_change_rate = "5"
 min_five_minute_rate = "2"
 min_volume_ratio = "2"
 min_turnover_krw = 3000000000
-

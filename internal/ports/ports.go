@@ -45,6 +45,11 @@ type Provider interface {
 	Status(context.Context) domain.BrokerStatus
 }
 
+type DividendProvider interface {
+	Dividends(context.Context, string) ([]domain.DividendEvent, error)
+	DividendSource() string
+}
+
 type Repository interface {
 	Migrate(context.Context) error
 	UpsertInstruments(context.Context, []domain.Symbol, domain.BrokerID) error

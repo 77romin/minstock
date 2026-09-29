@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/77romin/minstock-tui/internal/adapters/alphavantage"
 	"github.com/77romin/minstock-tui/internal/adapters/kiwoom"
 	"github.com/77romin/minstock-tui/internal/adapters/mock"
 	"github.com/77romin/minstock-tui/internal/adapters/nh"
@@ -34,6 +35,7 @@ func Build(ctx context.Context, cfg config.Config) (*Runtime, error) {
 	var instruments []ports.InstrumentProvider
 	var watchlists []ports.WatchlistReader
 	var fx []ports.FXProvider
+	var dividendProvider ports.DividendProvider
 
 	if cfg.Kiwoom.Enabled || security.Configured("kiwoom") {
 		creds, loadErr := security.Load("kiwoom")
@@ -73,11 +75,22 @@ func Build(ctx context.Context, cfg config.Config) (*Runtime, error) {
 		instruments = append(instruments, demo)
 		watchlists = append(watchlists, demo)
 		fx = append(fx, demo)
+		dividendProvider = demo
 		mode = "demo"
 	}
+	if apiKey, _, keyErr := security.LoadAPIKey("alphavantage", "ALPHAVANTAGE_API_KEY"); keyErr == nil {
+		client, clientErr := alphavantage.New(cfg.Dividends.BaseURL, apiKey)
+		if clientErr != nil {
+			repo.Close()
+			return nil, clientErr
+		}
+		dividendProvider = client
+	}
+	service := app.New(repo, providers, instruments, watchlists, fx)
+	service.SetDividendProvider(dividendProvider)
 
 	return &Runtime{
-		Service: app.New(repo, providers, instruments, watchlists, fx),
+		Service: service,
 		Repo:    repo,
 		Mode:    mode,
 	}, nil

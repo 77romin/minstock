@@ -30,21 +30,28 @@ type Scanner struct {
 	MinTurnoverKRW    int64  `toml:"min_turnover_krw"`
 }
 
+type Dividends struct {
+	Provider string `toml:"provider"`
+	BaseURL  string `toml:"base_url"`
+}
+
 type Config struct {
-	App     App     `toml:"app"`
-	Kiwoom  Broker  `toml:"kiwoom"`
-	NH      Broker  `toml:"nh"`
-	Scanner Scanner `toml:"scanner"`
-	Path    string  `toml:"-"`
-	DataDir string  `toml:"-"`
+	App       App       `toml:"app"`
+	Kiwoom    Broker    `toml:"kiwoom"`
+	NH        Broker    `toml:"nh"`
+	Dividends Dividends `toml:"dividends"`
+	Scanner   Scanner   `toml:"scanner"`
+	Path      string    `toml:"-"`
+	DataDir   string    `toml:"-"`
 }
 
 func Default() Config {
 	return Config{
-		App:     App{RefreshInterval: 5 * time.Second, RefreshRaw: "5s", Theme: "auto"},
-		Kiwoom:  Broker{Mode: "mock", BaseURL: "https://mockapi.kiwoom.com"},
-		NH:      Broker{Mode: "mock", BaseURL: "https://moapi.nhplug.com:8443", AuthURL: "https://api.nhplug.com:8443"},
-		Scanner: Scanner{MinChangeRate: "5", MinFiveMinuteRate: "2", MinVolumeRatio: "2", MinTurnoverKRW: 3_000_000_000},
+		App:       App{RefreshInterval: 5 * time.Second, RefreshRaw: "5s", Theme: "auto"},
+		Kiwoom:    Broker{Mode: "mock", BaseURL: "https://mockapi.kiwoom.com"},
+		NH:        Broker{Mode: "mock", BaseURL: "https://moapi.nhplug.com:8443", AuthURL: "https://api.nhplug.com:8443"},
+		Dividends: Dividends{Provider: "alphavantage", BaseURL: "https://www.alphavantage.co/query"},
+		Scanner:   Scanner{MinChangeRate: "5", MinFiveMinuteRate: "2", MinVolumeRatio: "2", MinTurnoverKRW: 3_000_000_000},
 	}
 }
 
@@ -108,6 +115,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("NHPLUG_AUTH_URL"); v != "" {
 		cfg.NH.AuthURL = v
+	}
+	if v := os.Getenv("ALPHAVANTAGE_BASE_URL"); v != "" {
+		cfg.Dividends.BaseURL = v
 	}
 }
 

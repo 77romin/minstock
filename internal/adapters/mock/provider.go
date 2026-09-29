@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/77romin/minstock-tui/internal/domain"
@@ -14,6 +15,26 @@ type Provider struct{}
 
 func New() *Provider                    { return &Provider{} }
 func (p *Provider) ID() domain.BrokerID { return domain.BrokerMock }
+
+func (p *Provider) DividendSource() string { return "demo" }
+
+func (p *Provider) Dividends(_ context.Context, symbol string) ([]domain.DividendEvent, error) {
+	now := time.Now()
+	amounts := map[string]decimal.Decimal{
+		"QQQ":  decimal.RequireFromString("0.83"),
+		"AAPL": decimal.RequireFromString("0.25"),
+	}
+	amount := amounts[strings.ToUpper(symbol)]
+	if !amount.IsPositive() {
+		amount = decimal.RequireFromString("0.40")
+	}
+	result := make([]domain.DividendEvent, 0, 4)
+	for _, monthsAgo := range []int{12, 9, 6, 3} {
+		date := now.AddDate(0, -monthsAgo, 0)
+		result = append(result, domain.DividendEvent{Symbol: strings.ToUpper(symbol), ExDate: date.AddDate(0, 0, -7), PaymentDate: date, Amount: amount, Currency: domain.USD, Provider: p.DividendSource(), Freshness: domain.FreshLive})
+	}
+	return result, nil
+}
 func (p *Provider) Status(context.Context) domain.BrokerStatus {
 	return domain.BrokerStatus{Broker: p.ID(), Connected: true, Mode: "demo", Message: "sample data", CheckedAt: time.Now()}
 }

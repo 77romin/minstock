@@ -119,8 +119,21 @@ func TestPerformanceScreenNavigation(t *testing.T) {
 		t.Fatalf("6 screen=%v", m.screen)
 	}
 	next, _ = m.handleKey("right")
+	if next.(Model).screen != dividendScreen {
+		t.Fatalf("performance right must open dividends: %v", next.(Model).screen)
+	}
+}
+
+func TestDividendScreenNavigation(t *testing.T) {
+	m := Model{screen: dashboardScreen}
+	next, cmd := m.handleKey("7")
+	got := next.(Model)
+	if got.screen != dividendScreen || !got.dividendLoading || cmd == nil {
+		t.Fatalf("dividend navigation screen=%v loading=%v cmd=%v", got.screen, got.dividendLoading, cmd)
+	}
+	next, _ = got.handleKey("right")
 	if next.(Model).screen != dashboardScreen {
-		t.Fatalf("performance right must wrap to dashboard: %v", next.(Model).screen)
+		t.Fatalf("dividend right must wrap to dashboard: %v", next.(Model).screen)
 	}
 }
 
@@ -140,6 +153,20 @@ func TestPerformanceScreenSwitchesTableChartAndPeriod(t *testing.T) {
 	m = next.(Model)
 	if m.performance != performanceTable {
 		t.Fatalf("second tab performance display=%v", m.performance)
+	}
+}
+
+func TestDividendTabTogglesHoldingsAndCalendar(t *testing.T) {
+	m := Model{screen: dividendScreen}
+	next, _ := m.handleKey("tab")
+	m = next.(Model)
+	if m.dividendDisplay != dividendCalendar || !strings.Contains(m.notice, "월별") {
+		t.Fatalf("tab dividend display=%v notice=%q", m.dividendDisplay, m.notice)
+	}
+	next, _ = m.handleKey("shift+tab")
+	m = next.(Model)
+	if m.dividendDisplay != dividendHoldings || !strings.Contains(m.notice, "종목별") {
+		t.Fatalf("shift+tab dividend display=%v notice=%q", m.dividendDisplay, m.notice)
 	}
 }
 
@@ -433,6 +460,32 @@ func TestPerformanceChartViewShowsLineChartSummary(t *testing.T) {
 	for _, want := range []string{"그래프", "일간", "기간 증감", "+200원", "+20.00%", "2026-09-28", "2026-09-29"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("performance chart value %q missing: %q", want, view)
+		}
+	}
+}
+
+func TestDividendViewShowsGrossNetAndMonthlyCalendar(t *testing.T) {
+	m := Model{width: 130, height: 32, dividends: app.DividendReport{
+		Source: "Alpha Vantage", Freshness: domain.FreshCached,
+		GrossAnnual: decimal.NewFromInt(100), NetAnnual: decimal.NewFromInt(85), NetAnnualKRW: decimal.NewFromInt(119000),
+		Holdings: []app.DividendHolding{{
+			Symbol: "QQQ", Quantity: decimal.NewFromInt(10), RecentAmount: decimal.RequireFromString("0.5911"),
+			RecentDate: time.Date(2026, 7, 31, 0, 0, 0, 0, time.Local), AnnualPerShare: decimal.NewFromInt(10),
+			GrossAnnual: decimal.NewFromInt(100), NetAnnual: decimal.NewFromInt(85), NetAnnualKRW: decimal.NewFromInt(119000),
+		}},
+		Months: []app.DividendMonth{{Month: time.Date(2026, 12, 1, 0, 0, 0, 0, time.Local), Gross: decimal.NewFromInt(25), Net: decimal.RequireFromString("21.25"), NetKRW: decimal.NewFromInt(29750)}},
+	}}
+	view := m.dividendView()
+	for _, want := range []string{"Alpha Vantage · 캐시", "+$100.00", "+$85.00", "119,000원", "QQQ", "$0.5911", "15%"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("dividend value %q missing: %q", want, view)
+		}
+	}
+	m.dividendDisplay = dividendCalendar
+	calendar := m.dividendView()
+	for _, want := range []string{"2026-12", "$21.25", "29,750원", "세후 USD / 세후 원화"} {
+		if !strings.Contains(calendar, want) {
+			t.Fatalf("dividend calendar value %q missing: %q", want, calendar)
 		}
 	}
 }

@@ -24,6 +24,7 @@ const (
 	watchlistScreen
 	moversScreen
 	performanceScreen
+	dividendScreen
 	detailScreen
 	helpScreen
 	diagnosticsScreen
@@ -51,6 +52,13 @@ const (
 	performanceChart
 )
 
+type dividendDisplay int
+
+const (
+	dividendHoldings dividendDisplay = iota
+	dividendCalendar
+)
+
 type performancePeriod int
 
 const (
@@ -66,39 +74,42 @@ var intervals = []domain.CandleInterval{
 }
 
 type Model struct {
-	service       *app.Service
-	mode          string
-	screen        screen
-	previous      screen
-	width, height int
-	cursor        int
-	loading       bool
-	err           error
-	snapshot      app.Snapshot
-	history       []domain.PortfolioSnapshot
-	query         string
-	results       []domain.Symbol
-	selected      domain.Symbol
-	candles       []domain.Candle
-	detailQuote   domain.Quote
-	intervalIndex int
-	maVisible     [4]bool
-	refreshEvery  time.Duration
-	filter        marketFilter
-	portfolioTab  marketFilter
-	portfolioCol  int
-	portfolioSort int
-	currency      currencyDisplay
-	performance   performanceDisplay
-	perfPeriod    performancePeriod
-	commandMode   bool
-	pendingG      bool
-	searchEditing bool
-	notice        string
-	refreshing    bool
-	enriching     bool
-	syncing       bool
-	liveLoaded    bool
+	service         *app.Service
+	mode            string
+	screen          screen
+	previous        screen
+	width, height   int
+	cursor          int
+	loading         bool
+	err             error
+	snapshot        app.Snapshot
+	history         []domain.PortfolioSnapshot
+	dividends       app.DividendReport
+	query           string
+	results         []domain.Symbol
+	selected        domain.Symbol
+	candles         []domain.Candle
+	detailQuote     domain.Quote
+	intervalIndex   int
+	maVisible       [4]bool
+	refreshEvery    time.Duration
+	filter          marketFilter
+	portfolioTab    marketFilter
+	portfolioCol    int
+	portfolioSort   int
+	currency        currencyDisplay
+	performance     performanceDisplay
+	perfPeriod      performancePeriod
+	dividendDisplay dividendDisplay
+	commandMode     bool
+	pendingG        bool
+	searchEditing   bool
+	notice          string
+	refreshing      bool
+	enriching       bool
+	syncing         bool
+	liveLoaded      bool
+	dividendLoading bool
 }
 
 type cachedDashboardMsg struct {
@@ -111,6 +122,7 @@ type performanceMsg struct {
 	history []domain.PortfolioSnapshot
 	err     error
 }
+type dividendMsg struct{ report app.DividendReport }
 type searchMsg struct {
 	query   string
 	results []domain.Symbol
@@ -174,6 +186,14 @@ func (m Model) performanceCmd() tea.Cmd {
 		to := time.Now()
 		history, err := m.service.PortfolioHistory(ctx, time.Time{}, to)
 		return performanceMsg{history: history, err: err}
+	}
+}
+
+func (m Model) dividendCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return dividendMsg{report: m.service.DividendPortfolio(ctx, m.snapshot.Positions, m.snapshot.FX)}
 	}
 }
 
@@ -247,7 +267,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.snapshot, m.loading, m.err = msg.snapshot, false, nil
 		m.refreshing, m.enriching, m.liveLoaded = false, true, true
 		m.notice = "계좌 갱신 완료 · 시세 보강 중"
-		return m, tea.Batch(m.enrichmentCmd(msg.snapshot), m.performanceCmd())
+		commands := []tea.Cmd{m.enrichmentCmd(msg.snapshot), m.performanceCmd()}
+		if m.screen == dividendScreen {
+			m.dividendLoading = true
+			commands = append(commands, m.dividendCmd())
+		}
+		return m, tea.Batch(commands...)
 	case enrichmentMsg:
 		m.snapshot, m.enriching = msg.snapshot, false
 		m.notice = "최신 데이터"
@@ -257,6 +282,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.err = msg.err
 		}
+	case dividendMsg:
+		m.dividends, m.dividendLoading = msg.report, false
 	case syncMsg:
 		m.syncing = false
 		if len(msg.errs) > 0 {
@@ -420,6 +447,9 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		m.screen, m.cursor = moversScreen, 0
 	case "6":
 		m.screen, m.cursor = performanceScreen, 0
+	case "7":
+		m.screen, m.cursor, m.dividendLoading = dividendScreen, 0, true
+		return m, m.dividendCmd()
 	case "m":
 		return m.toggleWatchlist()
 	case "f":
@@ -435,6 +465,9 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		} else if m.screen == performanceScreen {
 			m.performance = (m.performance + 1) % 2
 			m.notice = "성과 보기: " + m.performanceDisplayName()
+		} else if m.screen == dividendScreen {
+			m.dividendDisplay = (m.dividendDisplay + 1) % 2
+			m.notice = "배당 보기: " + m.dividendDisplayName()
 		}
 	case "shift+tab":
 		if m.screen == portfolioScreen {
@@ -442,13 +475,16 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		} else if m.screen == performanceScreen {
 			m.performance = (m.performance + 1) % 2
 			m.notice = "성과 보기: " + m.performanceDisplayName()
+		} else if m.screen == dividendScreen {
+			m.dividendDisplay = (m.dividendDisplay + 1) % 2
+			m.notice = "배당 보기: " + m.dividendDisplayName()
 		}
 	case "right", "l":
-		if m.screen >= dashboardScreen && m.screen <= performanceScreen {
+		if m.screen >= dashboardScreen && m.screen <= dividendScreen {
 			m.nextPrimaryScreen(1)
 		}
 	case "left", "h":
-		if m.screen >= dashboardScreen && m.screen <= performanceScreen {
+		if m.screen >= dashboardScreen && m.screen <= dividendScreen {
 			m.nextPrimaryScreen(-1)
 		}
 	case "]":
@@ -545,6 +581,9 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 			m.screen, m.cursor = moversScreen, 0
 		case "6":
 			m.screen, m.cursor = performanceScreen, 0
+		case "7":
+			m.screen, m.cursor, m.dividendLoading = dividendScreen, 0, true
+			return m, m.dividendCmd()
 		case "/":
 			m.searchEditing = true
 		case "left", "h":
@@ -605,7 +644,7 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) nextPrimaryScreen(delta int) {
-	screens := []screen{dashboardScreen, portfolioScreen, searchScreen, watchlistScreen, moversScreen, performanceScreen}
+	screens := []screen{dashboardScreen, portfolioScreen, searchScreen, watchlistScreen, moversScreen, performanceScreen, dividendScreen}
 	current := 0
 	for i, candidate := range screens {
 		if m.screen == candidate {
@@ -737,6 +776,13 @@ func (m Model) performanceDisplayName() string {
 	return "표"
 }
 
+func (m Model) dividendDisplayName() string {
+	if m.dividendDisplay == dividendCalendar {
+		return "월별"
+	}
+	return "종목별"
+}
+
 func (m Model) performancePeriodName() string {
 	switch m.perfPeriod {
 	case performanceWeekly:
@@ -762,6 +808,8 @@ func (m Model) itemCount() int {
 		return len(m.filteredResults())
 	case performanceScreen:
 		return len(m.performancePoints())
+	case dividendScreen:
+		return len(m.dividends.Holdings)
 	}
 	return 0
 }
@@ -828,12 +876,12 @@ var (
 )
 
 func (m Model) header() string {
-	labels := []string{"1 현황", "2 내 주식", "3 검색", "4 관심", "5 급등", "6 성과"}
+	labels := []string{"1 현황", "2 내 주식", "3 검색", "4 관심", "5 급등", "6 성과", "7 배당"}
 	active := m.screen
 	if active == detailScreen || active == helpScreen || active == diagnosticsScreen {
 		active = m.previous
 	}
-	if active < dashboardScreen || active > performanceScreen {
+	if active < dashboardScreen || active > dividendScreen {
 		active = dashboardScreen
 	}
 	tabs := make([]string, len(labels))
@@ -865,6 +913,8 @@ func (m Model) body() string {
 		body = m.moversView()
 	case performanceScreen:
 		body = m.performanceView()
+	case dividendScreen:
+		body = m.dividendView()
 	case detailScreen:
 		body = m.detailView()
 	case helpScreen:
@@ -1681,6 +1731,92 @@ func (m Model) performanceChartView() string {
 	return panel.Width(max(76, m.width-4)).Render(strings.Join(lines, "\n"))
 }
 
+func (m Model) dividendView() string {
+	if m.dividendLoading {
+		return panel.Width(max(60, m.width-4)).Render("배당 현황과 예상 배당금\n\n  보유 미국주식의 배당 이력을 불러오는 중…")
+	}
+	report := m.dividends
+	if len(report.Holdings) == 0 {
+		message := "보유 미국주식의 배당 데이터가 없습니다."
+		if len(report.Warnings) > 0 {
+			message += "\n\n  " + strings.Join(report.Warnings, "\n  ")
+		}
+		if report.Source == "미설정" {
+			message += "\n\n  설정: minstock setup dividend"
+		}
+		return panel.Width(max(60, m.width-4)).Render("배당 현황과 예상 배당금\n\n  " + message)
+	}
+	freshness := freshnessName(report.Freshness)
+	if report.Freshness == "" {
+		freshness = "-"
+	}
+	lines := []string{
+		"배당 현황과 예상 배당금 · USD", "",
+		fmt.Sprintf("  연간 예상 세전  %s", signedUSD(report.GrossAnnual)),
+		fmt.Sprintf("  연간 예상 세후  %s", signedUSD(report.NetAnnual)),
+		fmt.Sprintf("  세후 원화환산   %s원", money(report.NetAnnualKRW)),
+		fmt.Sprintf("  데이터          %s · %s", report.Source, freshness), "",
+	}
+	if m.dividendDisplay == dividendCalendar {
+		lines = append(lines, muted.Render(" 종목별 ")+"  "+selected.Render(" 월별 ")+"    "+muted.Render("Tab: 보기 전환"), "", "월별 예상 배당 · 향후 12개월")
+		if len(report.Months) == 0 {
+			lines = append(lines, "  예상 가능한 지급월이 없습니다.")
+		} else {
+			cells := make([]string, 0, len(report.Months))
+			for _, month := range report.Months {
+				cells = append(cells, fitCell(fmt.Sprintf("%s  $%s / %s원", month.Month.Format("2006-01"), month.Net.StringFixed(2), money(month.NetKRW)), 32, false))
+			}
+			for index := 0; index < len(cells); index += 2 {
+				line := "  " + cells[index]
+				if index+1 < len(cells) {
+					line += "  " + cells[index+1]
+				}
+				lines = append(lines, line)
+			}
+			lines = append(lines, muted.Render("  각 월: 세후 USD / 세후 원화"))
+		}
+	} else {
+		lines = append(lines, selected.Render(" 종목별 ")+"  "+muted.Render(" 월별 ")+"    "+muted.Render("Tab: 보기 전환"), "")
+		wide := m.width >= 115
+		if wide {
+			lines = append(lines, "  종목       보유수량       최근 주당배당     최근 지급일    연간 주당예상       세전 예상       세후 예상       세후 원화")
+		} else {
+			lines = append(lines, "  종목       보유수량       최근 배당       연간 세후       세후 원화")
+		}
+		for _, holding := range report.Holdings {
+			recent := "-"
+			if holding.RecentAmount.IsPositive() {
+				recent = "$" + holding.RecentAmount.StringFixed(4)
+			}
+			if wide {
+				recentDate := "-"
+				if !holding.RecentDate.IsZero() {
+					recentDate = holding.RecentDate.Format("2006-01-02")
+				}
+				lines = append(lines, "  "+strings.Join([]string{
+					fitCell(holding.Symbol, 8, false), fitCell(holding.Quantity.StringFixed(4), 12, true),
+					fitCell(recent, 16, true), fitCell(recentDate, 13, true),
+					fitCell("$"+holding.AnnualPerShare.StringFixed(4), 16, true),
+					fitCell("$"+holding.GrossAnnual.StringFixed(2), 14, true),
+					fitCell("$"+holding.NetAnnual.StringFixed(2), 14, true),
+					fitCell(money(holding.NetAnnualKRW)+"원", 15, true),
+				}, " "))
+			} else {
+				lines = append(lines, "  "+strings.Join([]string{
+					fitCell(holding.Symbol, 8, false), fitCell(holding.Quantity.StringFixed(4), 12, true),
+					fitCell(recent, 14, true), fitCell("$"+holding.NetAnnual.StringFixed(2), 14, true),
+					fitCell(money(holding.NetAnnualKRW)+"원", 15, true),
+				}, " "))
+			}
+		}
+	}
+	lines = append(lines, "", muted.Render("※ 최근 12개월 배당을 연간 예상치로 사용합니다. 세후는 미국 원천징수 15% 가정이며 미래 금액·지급월은 추정치입니다."))
+	if len(report.Warnings) > 0 {
+		lines = append(lines, muted.Render("경고: "+strings.Join(report.Warnings, " · ")))
+	}
+	return panel.Width(max(76, m.width-4)).Render(strings.Join(lines, "\n"))
+}
+
 func (m Model) detailView() string {
 	interval := intervals[m.intervalIndex]
 	if m.loading {
@@ -1742,7 +1878,7 @@ func detailAnalysis(q domain.Quote) string {
 }
 
 func (m Model) helpView() string {
-	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\n←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지\ngt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n1~6 주요 화면 이동  ? 도움말\n\n내 주식\nTab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동\nt 기본순서→수익률→보유비중 정렬\n\n성과\nTab 표·그래프 전환    그래프에서 t 일·주·월·연 전환\n\n상세 차트\nh/l 또는 ←/→ 봉 단위 변경\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
+	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\n←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지\ngt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n1~7 주요 화면 이동  ? 도움말\n\n내 주식\nTab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동\nt 기본순서→수익률→보유비중 정렬\n\n성과\nTab 표·그래프 전환    그래프에서 t 일·주·월·연 전환\n\n배당\n최근 12개월 기준 연간·월별 예상 배당과 세전·세후·원화 조회\nTab 종목별·월별 화면 전환\n\n상세 차트\nh/l 또는 ←/→ 봉 단위 변경\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
 }
 
 func (m Model) diagnosticsView() string {
@@ -1774,6 +1910,8 @@ func (m Model) footer() string {
 	base := " ↑↓/jk 이동  Enter 상세  / 검색  : 명령  ? 도움말"
 	if m.screen == performanceScreen {
 		base = " Tab 표/그래프  t 일/주/월/연  : 명령  ? 도움말"
+	} else if m.screen == dividendScreen {
+		base = " Tab 종목별/월별  : 명령  ? 도움말"
 	}
 	return muted.Render(base) + "  │  " + m.connectionIndicator()
 }

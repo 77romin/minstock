@@ -20,6 +20,7 @@ type Service struct {
 	instruments []ports.InstrumentProvider
 	watchlists  []ports.WatchlistReader
 	fx          []ports.FXProvider
+	dividends   ports.DividendProvider
 }
 
 type Snapshot struct {

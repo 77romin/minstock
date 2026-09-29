@@ -78,6 +78,40 @@ func Configured(provider string) bool {
 	return err == nil
 }
 
+func LoadAPIKey(provider, envName string) (string, string, error) {
+	if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
+		return value, "environment", nil
+	}
+	value, err := keyring.Get(service, strings.ToLower(provider)+".api_key")
+	if err != nil || strings.TrimSpace(value) == "" {
+		if err != nil && !errors.Is(err, keyring.ErrNotFound) {
+			return "", "", fmt.Errorf("%s OS keyring unavailable or access denied: %v", provider, err)
+		}
+		return "", "", fmt.Errorf("%s API key not found in environment or OS keyring", provider)
+	}
+	return strings.TrimSpace(value), "os-keyring", nil
+}
+
+func SaveAPIKey(provider, value string) error {
+	provider, value = strings.ToLower(strings.TrimSpace(provider)), strings.TrimSpace(value)
+	if provider == "" || value == "" {
+		return errors.New("provider and API key are required")
+	}
+	if err := keyring.Set(service, provider+".api_key", value); err != nil {
+		return fmt.Errorf("save API key: %w", err)
+	}
+	stored, err := keyring.Get(service, provider+".api_key")
+	if err != nil || stored != value {
+		return errors.New("verify API key in OS keyring: value was not persisted")
+	}
+	return nil
+}
+
+func APIKeyConfigured(provider, envName string) bool {
+	_, _, err := LoadAPIKey(provider, envName)
+	return err == nil
+}
+
 type CachedToken struct {
 	Value     string    `json:"value"`
 	ExpiresAt time.Time `json:"expires_at"`

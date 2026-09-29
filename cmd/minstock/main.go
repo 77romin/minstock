@@ -42,6 +42,7 @@ func run(args []string) error {
 	setupShort := flags.Bool("s", false, "same as --setup")
 	kiwoomFlag := flags.Bool("kiwoom", false, "select Kiwoom for --setup")
 	nhFlag := flags.Bool("nh", false, "select NH for --setup")
+	dividendFlag := flags.Bool("dividend", false, "select dividend data provider for --setup")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -61,11 +62,20 @@ func run(args []string) error {
 		*setupFlag = true
 	}
 	if *setupFlag {
-		if *kiwoomFlag == *nhFlag {
-			return errors.New("--setup requires exactly one broker flag: --kiwoom or --nh")
+		selected := 0
+		for _, enabled := range []bool{*kiwoomFlag, *nhFlag, *dividendFlag} {
+			if enabled {
+				selected++
+			}
+		}
+		if selected != 1 {
+			return errors.New("--setup requires exactly one flag: --kiwoom, --nh, or --dividend")
 		}
 		if *kiwoomFlag {
 			return setup("kiwoom")
+		}
+		if *dividendFlag {
+			return setup("dividend")
 		}
 		return setup("nh")
 	}
@@ -144,6 +154,19 @@ func run(args []string) error {
 
 func setup(provider string) error {
 	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "dividend" || provider == "alphavantage" {
+		fmt.Print("Alpha Vantage API Key (입력 숨김): ")
+		apiKey, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+		if err != nil {
+			return err
+		}
+		if err := security.SaveAPIKey("alphavantage", string(apiKey)); err != nil {
+			return err
+		}
+		fmt.Println("배당 데이터 API 키를 OS 보안 키링에 저장했습니다.")
+		return nil
+	}
 	if provider != "kiwoom" && provider != "nh" {
 		return fmt.Errorf("지원하지 않는 증권사 %q", provider)
 	}
@@ -185,6 +208,13 @@ func printDiagnosis(cfg config.Config) error {
 		}
 		fmt.Printf("%-7s: %-24s mode=%-4s endpoint=%s\n", item.name, state, item.broker.Mode, item.broker.BaseURL)
 	}
+	dividendState := "미설정"
+	if _, source, err := security.LoadAPIKey("alphavantage", "ALPHAVANTAGE_API_KEY"); err == nil {
+		dividendState = "설정됨 (" + source + ")"
+	} else {
+		dividendState = "미설정 (" + err.Error() + ")"
+	}
+	fmt.Printf("%-7s: %-24s provider=%s endpoint=%s\n", "배당", dividendState, cfg.Dividends.Provider, cfg.Dividends.BaseURL)
 	return nil
 }
 
@@ -195,9 +225,10 @@ Usage:
   minstock                         Start the TUI
   minstock sync                    Sync instrument and watchlist data
   minstock --sync, -sy             Same as "minstock sync"
-  minstock setup <kiwoom|nh>       Store API credentials in the OS keychain
+  minstock setup <kiwoom|nh|dividend> Store API credentials in the OS keychain
   minstock --setup, -s --kiwoom    Store Kiwoom credentials
   minstock --setup, -s --nh        Store NH credentials
+  minstock --setup, -s --dividend  Store Alpha Vantage API key
   minstock --diagnose, -d          Check configuration and credential status
   minstock --config <path>         Use an alternate configuration file
   minstock --version, -v           Print the version
