@@ -771,6 +771,7 @@ var (
 	selectedRow = lipgloss.NewStyle().Background(lipgloss.Color("236"))
 	positive    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	negative    = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	neutral     = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 	statusOK    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	statusWait  = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
 	statusDown  = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
@@ -1090,6 +1091,16 @@ func profitStyle(value decimal.Decimal) lipgloss.Style {
 	return lipgloss.NewStyle()
 }
 
+func performanceValueStyle(value decimal.Decimal) lipgloss.Style {
+	if value.IsPositive() {
+		return positive
+	}
+	if value.IsNegative() {
+		return negative
+	}
+	return neutral
+}
+
 func signedPercent(value decimal.Decimal) string {
 	if value.IsPositive() {
 		return "+" + value.StringFixed(2) + "%"
@@ -1285,12 +1296,13 @@ func (m Model) performanceView() string {
 		if !previous.TotalAssets.IsZero() {
 			changeRate = change.Div(previous.TotalAssets).Mul(decimal.NewFromInt(100))
 		}
-		comparison = fmt.Sprintf("%s (%s)", signedMoney(change)+"원", signedPercent(changeRate))
+		style := performanceValueStyle(change)
+		comparison = fmt.Sprintf("%s (%s)", style.Render(signedMoney(change)+"원"), style.Render(signedPercent(changeRate)))
 	}
 	lines := []string{
 		fmt.Sprintf("포트폴리오 성과 · 원화 기준 · %d일 기록", len(points)), "",
 		fmt.Sprintf("  총자산       %s원", money(latest.TotalAssets)),
-		fmt.Sprintf("  평가손익     %s", signedMoney(latest.ProfitLoss)+"원"),
+		fmt.Sprintf("  평가손익     %s", performanceValueStyle(latest.ProfitLoss).Render(signedMoney(latest.ProfitLoss)+"원")),
 		fmt.Sprintf("  전 기록 대비 %s", comparison), "",
 	}
 	wide := m.width >= 110
@@ -1302,22 +1314,27 @@ func (m Model) performanceView() string {
 	start := max(0, len(points)-max(3, m.height-13))
 	for i := start; i < len(points); i++ {
 		point := points[i]
+		delta := decimal.Zero
 		deltaText, rateText := "-", "-"
 		if i > 0 {
-			delta := point.TotalAssets.Sub(points[i-1].TotalAssets)
+			delta = point.TotalAssets.Sub(points[i-1].TotalAssets)
 			rate := decimal.Zero
 			if !points[i-1].TotalAssets.IsZero() {
 				rate = delta.Div(points[i-1].TotalAssets).Mul(decimal.NewFromInt(100))
 			}
 			deltaText, rateText = signedMoney(delta)+"원", signedPercent(rate)
 		}
+		dateCell := fitCell(point.Date.In(time.Local).Format("2006-01-02"), 10, false)
+		assetCell := fitCell(money(point.TotalAssets)+"원", 16, true)
+		profitCell := performanceValueStyle(point.ProfitLoss).Render(fitCell(signedMoney(point.ProfitLoss)+"원", 16, true))
+		deltaStyle := performanceValueStyle(delta)
+		rateCell := deltaStyle.Render(fitCell(rateText, 10, true))
 		var line string
 		if wide {
-			line = fmt.Sprintf("  %-10s %15s원 %16s %16s %10s",
-				point.Date.In(time.Local).Format("2006-01-02"), money(point.TotalAssets), signedMoney(point.ProfitLoss)+"원", deltaText, rateText)
+			deltaCell := deltaStyle.Render(fitCell(deltaText, 16, true))
+			line = "  " + strings.Join([]string{dateCell, assetCell, profitCell, deltaCell, rateCell}, " ")
 		} else {
-			line = fmt.Sprintf("  %-10s %15s원 %16s %10s",
-				point.Date.In(time.Local).Format("2006-01-02"), money(point.TotalAssets), signedMoney(point.ProfitLoss)+"원", rateText)
+			line = "  " + strings.Join([]string{dateCell, assetCell, profitCell, rateCell}, " ")
 		}
 		lines = append(lines, line)
 	}

@@ -258,6 +258,31 @@ func TestPerformanceViewExplainsSingleDayHistory(t *testing.T) {
 	}
 }
 
+func TestPerformanceViewColorsValuesByDirection(t *testing.T) {
+	loc := time.FixedZone("KST", 9*60*60)
+	day1 := time.Date(2026, 9, 27, 0, 0, 0, 0, loc)
+	m := Model{width: 120, height: 30, history: []domain.PortfolioSnapshot{
+		{Date: day1, Broker: domain.BrokerNH, Currency: domain.KRW, ValueTotalKRW: decimal.NewFromInt(1000)},
+		{Date: day1.AddDate(0, 0, 1), Broker: domain.BrokerNH, Currency: domain.KRW, ValueTotalKRW: decimal.NewFromInt(1100), ProfitLossKRW: decimal.NewFromInt(50)},
+		{Date: day1.AddDate(0, 0, 2), Broker: domain.BrokerNH, Currency: domain.KRW, ValueTotalKRW: decimal.NewFromInt(990), ProfitLossKRW: decimal.NewFromInt(-20)},
+	}}
+	view := m.performanceView()
+	for _, want := range []string{
+		neutral.Render(fitCell("0원", 16, true)),
+		neutral.Render(fitCell("-", 16, true)),
+		positive.Render(fitCell("+50원", 16, true)),
+		positive.Render(fitCell("+100원", 16, true)),
+		positive.Render(fitCell("+10.00%", 10, true)),
+		negative.Render(fitCell("-20원", 16, true)),
+		negative.Render(fitCell("-110원", 16, true)),
+		negative.Render(fitCell("-10.00%", 10, true)),
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("directional performance value %q missing: %q", want, view)
+		}
+	}
+}
+
 func TestNHPortfolioDoesNotFallBackToKiwoomExchangeRate(t *testing.T) {
 	position := domain.Position{
 		Broker: domain.BrokerNH, Symbol: domain.Symbol{Name: "애플", Market: domain.MarketUS, Currency: domain.USD},
