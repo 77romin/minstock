@@ -879,33 +879,17 @@ func (m Model) body() string {
 }
 
 func (m Model) dashboardView() string {
+	summaries := brokerAssetSummaries(m.snapshot)
 	totalValue, totalProfit := decimal.Zero, decimal.Zero
 	usdValue, usdProfit := decimal.Zero, decimal.Zero
-	for _, b := range m.snapshot.Balances {
-		value := b.ValueTotal.Add(b.Cash)
-		if b.Currency == domain.USD {
-			usdValue, usdProfit = usdValue.Add(value), usdProfit.Add(b.ProfitLoss)
-			rate := b.ExchangeRate
-			if !rate.IsPositive() && m.snapshot.FX.Provider == b.Broker {
-				rate = m.snapshot.FX.Rate
-			}
-			marketValueKRW := b.ValueTotalKRW
-			if marketValueKRW.IsZero() && rate.IsPositive() {
-				marketValueKRW = b.ValueTotal.Mul(rate)
-			}
-			cashKRW := b.CashKRW
-			if cashKRW.IsZero() && rate.IsPositive() {
-				cashKRW = b.Cash.Mul(rate)
-			}
-			profitKRW := b.ProfitLossKRW
-			if profitKRW.IsZero() && rate.IsPositive() {
-				profitKRW = b.ProfitLoss.Mul(rate)
-			}
-			totalValue = totalValue.Add(marketValueKRW).Add(cashKRW)
-			totalProfit = totalProfit.Add(profitKRW)
-		} else {
-			totalValue, totalProfit = totalValue.Add(value), totalProfit.Add(b.ProfitLoss)
+	for _, summary := range summaries {
+		if !summary.HasData {
+			continue
 		}
+		totalValue = totalValue.Add(summary.TotalAssetsKRW)
+		totalProfit = totalProfit.Add(summary.ProfitLossKRW)
+		usdValue = usdValue.Add(summary.USAssets)
+		usdProfit = usdProfit.Add(summary.USProfitLoss)
 	}
 	fx := "-"
 	if !m.snapshot.FX.Rate.IsZero() {
@@ -923,7 +907,144 @@ func (m Model) dashboardView() string {
 		status = append(status, fmt.Sprintf("%s %-7s %-5s %s", mark, s.Broker, s.Mode, s.Message))
 	}
 	right := panel.Width(max(28, m.width/2-4)).Render("연결 상태\n\n  " + strings.Join(status, "\n  "))
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
+	top := lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
+	return top + "\n" + m.brokerAssetBreakdownView(summaries, totalValue)
+}
+
+type brokerAssetSummary struct {
+	Broker         domain.BrokerID
+	HasData        bool
+	TotalAssetsKRW decimal.Decimal
+	PurchaseKRW    decimal.Decimal
+	ProfitLossKRW  decimal.Decimal
+	USAssets       decimal.Decimal
+	USProfitLoss   decimal.Decimal
+	ExchangeRate   decimal.Decimal
+}
+
+func brokerAssetSummaries(snapshot app.Snapshot) []brokerAssetSummary {
+	byBroker := make(map[domain.BrokerID]*brokerAssetSummary)
+	ensure := func(broker domain.BrokerID) *brokerAssetSummary {
+		if summary := byBroker[broker]; summary != nil {
+			return summary
+		}
+		summary := &brokerAssetSummary{Broker: broker}
+		byBroker[broker] = summary
+		return summary
+	}
+	for _, status := range snapshot.Statuses {
+		ensure(status.Broker)
+	}
+	for _, balance := range snapshot.Balances {
+		summary := ensure(balance.Broker)
+		summary.HasData = true
+		if balance.Currency != domain.USD {
+			summary.TotalAssetsKRW = summary.TotalAssetsKRW.Add(balance.ValueTotal).Add(balance.Cash)
+			summary.PurchaseKRW = summary.PurchaseKRW.Add(balance.PurchaseTotal)
+			summary.ProfitLossKRW = summary.ProfitLossKRW.Add(balance.ProfitLoss)
+			continue
+		}
+		summary.USAssets = summary.USAssets.Add(balance.ValueTotal).Add(balance.Cash)
+		summary.USProfitLoss = summary.USProfitLoss.Add(balance.ProfitLoss)
+		rate := balance.ExchangeRate
+		if !rate.IsPositive() && snapshot.FX.Provider == balance.Broker {
+			rate = snapshot.FX.Rate
+		}
+		if rate.IsPositive() {
+			summary.ExchangeRate = rate
+		}
+		cashKRW, purchaseKRW := balance.CashKRW, balance.PurchaseTotalKRW
+		valueKRW, profitKRW := balance.ValueTotalKRW, balance.ProfitLossKRW
+		if rate.IsPositive() {
+			if cashKRW.IsZero() {
+				cashKRW = balance.Cash.Mul(rate)
+			}
+			if purchaseKRW.IsZero() {
+				purchaseKRW = balance.PurchaseTotal.Mul(rate)
+			}
+			if valueKRW.IsZero() {
+				valueKRW = balance.ValueTotal.Mul(rate)
+			}
+			if profitKRW.IsZero() {
+				profitKRW = balance.ProfitLoss.Mul(rate)
+			}
+		}
+		summary.TotalAssetsKRW = summary.TotalAssetsKRW.Add(valueKRW).Add(cashKRW)
+		summary.PurchaseKRW = summary.PurchaseKRW.Add(purchaseKRW)
+		summary.ProfitLossKRW = summary.ProfitLossKRW.Add(profitKRW)
+	}
+	result := make([]brokerAssetSummary, 0, len(byBroker))
+	for _, summary := range byBroker {
+		result = append(result, *summary)
+	}
+	order := func(broker domain.BrokerID) int {
+		switch broker {
+		case domain.BrokerKiwoom:
+			return 0
+		case domain.BrokerNH:
+			return 1
+		case domain.BrokerMock:
+			return 2
+		default:
+			return 3
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		left, right := order(result[i].Broker), order(result[j].Broker)
+		if left == right {
+			return result[i].Broker < result[j].Broker
+		}
+		return left < right
+	})
+	return result
+}
+
+func (m Model) brokerAssetBreakdownView(summaries []brokerAssetSummary, totalAssets decimal.Decimal) string {
+	wide := m.width >= 110
+	lines := []string{"증권사별 자산 현황", ""}
+	if wide {
+		lines = append(lines, "  증권사           총자산          평가손익      수익률       미국자산      적용환율     자산비중")
+	} else {
+		lines = append(lines, "  증권사           총자산          평가손익      수익률   자산비중")
+	}
+	for _, summary := range summaries {
+		brokerCell := fitCell(brokerDisplayName(summary.Broker), 8, false)
+		if !summary.HasData {
+			if wide {
+				lines = append(lines, "  "+strings.Join([]string{brokerCell, fitCell("데이터 없음", 16, true), fitCell("-", 16, true), fitCell("-", 9, true), fitCell("-", 13, true), fitCell("-", 12, true), fitCell("-", 9, true)}, " "))
+			} else {
+				lines = append(lines, "  "+strings.Join([]string{brokerCell, fitCell("데이터 없음", 16, true), fitCell("-", 16, true), fitCell("-", 9, true), fitCell("-", 9, true)}, " "))
+			}
+			continue
+		}
+		profitRate := decimal.Zero
+		if !summary.PurchaseKRW.IsZero() {
+			profitRate = summary.ProfitLossKRW.Div(summary.PurchaseKRW).Mul(decimal.NewFromInt(100))
+		}
+		weight := decimal.Zero
+		if !totalAssets.IsZero() {
+			weight = summary.TotalAssetsKRW.Div(totalAssets).Mul(decimal.NewFromInt(100))
+		}
+		assetCell := fitCell(money(summary.TotalAssetsKRW)+"원", 16, true)
+		profitStyle := directionalValueStyle(summary.ProfitLossKRW)
+		profitCell := profitStyle.Render(fitCell(signedMoney(summary.ProfitLossKRW)+"원", 16, true))
+		rateCell := profitStyle.Render(fitCell(signedPercent(profitRate), 9, true))
+		weightCell := fitCell(weight.StringFixed(2)+"%", 9, true)
+		if wide {
+			usAsset := "$" + commaNumber(summary.USAssets.StringFixed(2))
+			fx := "-"
+			if summary.ExchangeRate.IsPositive() {
+				fx = summary.ExchangeRate.StringFixed(2) + "원"
+			}
+			lines = append(lines, "  "+strings.Join([]string{brokerCell, assetCell, profitCell, rateCell, fitCell(usAsset, 13, true), fitCell(fx, 12, true), weightCell}, " "))
+		} else {
+			lines = append(lines, "  "+strings.Join([]string{brokerCell, assetCell, profitCell, rateCell, weightCell}, " "))
+		}
+	}
+	if len(summaries) == 0 {
+		lines = append(lines, "  표시할 증권사 자산 데이터가 없습니다.")
+	}
+	return panel.Width(max(60, m.width-4)).Render(strings.Join(lines, "\n"))
 }
 
 func (m Model) portfolioView() string {

@@ -269,6 +269,51 @@ func TestDashboardColorsNegativeAndZeroProfit(t *testing.T) {
 	}
 }
 
+func TestBrokerAssetSummariesKeepBrokerExchangeRatesSeparate(t *testing.T) {
+	snapshot := app.Snapshot{
+		Statuses: []domain.BrokerStatus{
+			{Broker: domain.BrokerKiwoom, Connected: false},
+			{Broker: domain.BrokerNH, Connected: true},
+		},
+		Balances: []domain.Balance{
+			{Broker: domain.BrokerNH, Currency: domain.KRW, Cash: decimal.NewFromInt(100_000), PurchaseTotal: decimal.NewFromInt(900_000), ValueTotal: decimal.NewFromInt(1_000_000), ProfitLoss: decimal.NewFromInt(100_000)},
+			{Broker: domain.BrokerNH, Currency: domain.USD, Cash: decimal.NewFromInt(400), PurchaseTotal: decimal.NewFromInt(500), ValueTotal: decimal.NewFromInt(600), ProfitLoss: decimal.NewFromInt(100), ExchangeRate: decimal.NewFromInt(1400)},
+		},
+		FX: domain.FXRate{Provider: domain.BrokerKiwoom, Rate: decimal.NewFromInt(9999)},
+	}
+	summaries := brokerAssetSummaries(snapshot)
+	if len(summaries) != 2 || summaries[0].Broker != domain.BrokerKiwoom || summaries[0].HasData {
+		t.Fatalf("disconnected Kiwoom summary=%#v", summaries)
+	}
+	nh := summaries[1]
+	if nh.Broker != domain.BrokerNH || !nh.TotalAssetsKRW.Equal(decimal.NewFromInt(2_500_000)) || !nh.PurchaseKRW.Equal(decimal.NewFromInt(1_600_000)) || !nh.ProfitLossKRW.Equal(decimal.NewFromInt(240_000)) {
+		t.Fatalf("NH summary=%#v", nh)
+	}
+	if !nh.USAssets.Equal(decimal.NewFromInt(1000)) || !nh.ExchangeRate.Equal(decimal.NewFromInt(1400)) {
+		t.Fatalf("NH USD summary=%#v", nh)
+	}
+
+	view := (Model{width: 140, snapshot: snapshot}).dashboardView()
+	for _, want := range []string{"증권사별 자산 현황", "데이터 없음", "2,500,000원", "+240,000원", "+15.00%", "$1,000.00", "1400.00원", "100.00%"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("broker breakdown value %q missing: %q", want, view)
+		}
+	}
+	if !strings.Contains(view, positive.Render(fitCell("+240,000원", 16, true))) {
+		t.Fatalf("broker profit is not red: %q", view)
+	}
+}
+
+func TestBrokerAssetSummariesDoNotUseAnotherBrokersFX(t *testing.T) {
+	summaries := brokerAssetSummaries(app.Snapshot{
+		Balances: []domain.Balance{{Broker: domain.BrokerNH, Currency: domain.USD, Cash: decimal.NewFromInt(400), ValueTotal: decimal.NewFromInt(600), ProfitLoss: decimal.NewFromInt(100)}},
+		FX:       domain.FXRate{Provider: domain.BrokerKiwoom, Rate: decimal.NewFromInt(1400)},
+	})
+	if len(summaries) != 1 || !summaries[0].TotalAssetsKRW.IsZero() || !summaries[0].ProfitLossKRW.IsZero() || !summaries[0].ExchangeRate.IsZero() {
+		t.Fatalf("NH summary must not use Kiwoom FX: %#v", summaries)
+	}
+}
+
 func TestPerformanceViewAggregatesCurrenciesByDate(t *testing.T) {
 	loc := time.FixedZone("KST", 9*60*60)
 	day1 := time.Date(2026, 9, 28, 0, 0, 0, 0, loc)
