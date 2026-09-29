@@ -44,6 +44,22 @@ const (
 	currencyKRW
 )
 
+type performanceDisplay int
+
+const (
+	performanceTable performanceDisplay = iota
+	performanceChart
+)
+
+type performancePeriod int
+
+const (
+	performanceDaily performancePeriod = iota
+	performanceWeekly
+	performanceMonthly
+	performanceYearly
+)
+
 var intervals = []domain.CandleInterval{
 	domain.IntervalTick, domain.Interval1Min, domain.Interval5Min, domain.Interval15Min,
 	domain.Interval60Min, domain.IntervalDay, domain.IntervalWeek, domain.IntervalMonth, domain.IntervalYear,
@@ -73,6 +89,8 @@ type Model struct {
 	portfolioCol  int
 	portfolioSort int
 	currency      currencyDisplay
+	performance   performanceDisplay
+	perfPeriod    performancePeriod
 	commandMode   bool
 	pendingG      bool
 	searchEditing bool
@@ -154,7 +172,7 @@ func (m Model) performanceCmd() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		to := time.Now()
-		history, err := m.service.PortfolioHistory(ctx, to.AddDate(-1, 0, 0), to)
+		history, err := m.service.PortfolioHistory(ctx, time.Time{}, to)
 		return performanceMsg{history: history, err: err}
 	}
 }
@@ -414,10 +432,16 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case "tab":
 		if m.screen == portfolioScreen {
 			m.switchPortfolioTab(1)
+		} else if m.screen == performanceScreen {
+			m.performance = (m.performance + 1) % 2
+			m.notice = "성과 보기: " + m.performanceDisplayName()
 		}
 	case "shift+tab":
 		if m.screen == portfolioScreen {
 			m.switchPortfolioTab(-1)
+		} else if m.screen == performanceScreen {
+			m.performance = (m.performance + 1) % 2
+			m.notice = "성과 보기: " + m.performanceDisplayName()
 		}
 	case "right", "l":
 		if m.screen >= dashboardScreen && m.screen <= performanceScreen {
@@ -439,6 +463,9 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		if m.screen == portfolioScreen {
 			m.portfolioSort = (m.portfolioSort + 1) % 3
 			m.cursor = 0
+		} else if m.screen == performanceScreen && m.performance == performanceChart {
+			m.perfPeriod = (m.perfPeriod + 1) % 4
+			m.notice = "성과 주기: " + m.performancePeriodName()
 		}
 	case "c":
 		m.currency = (m.currency + 1) % 2
@@ -700,6 +727,26 @@ func (m Model) currencyName() string {
 		return "₩"
 	default:
 		return "$ / ₩"
+	}
+}
+
+func (m Model) performanceDisplayName() string {
+	if m.performance == performanceChart {
+		return "그래프"
+	}
+	return "표"
+}
+
+func (m Model) performancePeriodName() string {
+	switch m.perfPeriod {
+	case performanceWeekly:
+		return "주간"
+	case performanceMonthly:
+		return "월간"
+	case performanceYearly:
+		return "연간"
+	default:
+		return "일간"
 	}
 }
 
@@ -1283,6 +1330,13 @@ func (m Model) performancePoints() []performancePoint {
 }
 
 func (m Model) performanceView() string {
+	if m.performance == performanceChart {
+		return m.performanceChartView()
+	}
+	return m.performanceTableView()
+}
+
+func (m Model) performanceTableView() string {
 	points := m.performancePoints()
 	if len(points) == 0 {
 		return panel.Width(max(60, m.width-4)).Render("포트폴리오 성과\n\n  아직 저장된 일별 스냅샷이 없습니다.\n  계좌 조회가 완료되면 오늘 기록부터 자동으로 저장됩니다.")
@@ -1301,6 +1355,7 @@ func (m Model) performanceView() string {
 	}
 	lines := []string{
 		fmt.Sprintf("포트폴리오 성과 · 원화 기준 · %d일 기록", len(points)), "",
+		selected.Render(" 표 ") + "  " + muted.Render(" 그래프 ") + "    " + muted.Render("Tab: 보기 전환"), "",
 		fmt.Sprintf("  총자산       %s원", money(latest.TotalAssets)),
 		fmt.Sprintf("  평가손익     %s", performanceValueStyle(latest.ProfitLoss).Render(signedMoney(latest.ProfitLoss)+"원")),
 		fmt.Sprintf("  전 기록 대비 %s", comparison), "",
@@ -1339,6 +1394,73 @@ func (m Model) performanceView() string {
 		lines = append(lines, line)
 	}
 	lines = append(lines, "", muted.Render("※ 자산 증감은 입출금을 포함하며 투자 수익률과 다를 수 있습니다."))
+	return panel.Width(max(76, m.width-4)).Render(strings.Join(lines, "\n"))
+}
+
+func aggregatePerformancePeriod(points []performancePoint, period performancePeriod) []performancePoint {
+	if period == performanceDaily || len(points) < 2 {
+		return append([]performancePoint(nil), points...)
+	}
+	result := make([]performancePoint, 0, len(points))
+	lastKey := ""
+	for _, point := range points {
+		date := point.Date.In(time.Local)
+		key := ""
+		switch period {
+		case performanceWeekly:
+			year, week := date.ISOWeek()
+			key = fmt.Sprintf("%04d-W%02d", year, week)
+		case performanceMonthly:
+			key = date.Format("2006-01")
+		case performanceYearly:
+			key = date.Format("2006")
+		}
+		if key == lastKey {
+			result[len(result)-1] = point
+			continue
+		}
+		result = append(result, point)
+		lastKey = key
+	}
+	return result
+}
+
+func (m Model) performanceChartView() string {
+	allPoints := m.performancePoints()
+	if len(allPoints) == 0 {
+		return panel.Width(max(60, m.width-4)).Render("포트폴리오 성과\n\n  아직 저장된 일별 스냅샷이 없습니다.\n  계좌 조회가 완료되면 오늘 기록부터 자동으로 저장됩니다.")
+	}
+	points := aggregatePerformancePeriod(allPoints, m.perfPeriod)
+	first, latest := points[0], points[len(points)-1]
+	change := latest.TotalAssets.Sub(first.TotalAssets)
+	changeRate := decimal.Zero
+	if !first.TotalAssets.IsZero() {
+		changeRate = change.Div(first.TotalAssets).Mul(decimal.NewFromInt(100))
+	}
+	changeText := "비교 기록 필요"
+	if len(points) > 1 {
+		style := performanceValueStyle(change)
+		changeText = fmt.Sprintf("%s (%s)", style.Render(signedMoney(change)+"원"), style.Render(signedPercent(changeRate)))
+	}
+	periodTabs := make([]string, 0, 4)
+	for index, name := range []string{"일간", "주간", "월간", "연간"} {
+		if performancePeriod(index) == m.perfPeriod {
+			periodTabs = append(periodTabs, selected.Render(" "+name+" "))
+		} else {
+			periodTabs = append(periodTabs, muted.Render(" "+name+" "))
+		}
+	}
+	contentWidth := max(72, m.width-8)
+	chartHeight := max(10, m.height-14)
+	lines := []string{
+		fmt.Sprintf("포트폴리오 성과 · 원화 기준 · %d일 기록", len(allPoints)),
+		muted.Render(" 표 ") + "  " + selected.Render(" 그래프 ") + "    " + strings.Join(periodTabs, " "), "",
+		fmt.Sprintf("  총자산       %s원", money(latest.TotalAssets)),
+		fmt.Sprintf("  평가손익     %s", performanceValueStyle(latest.ProfitLoss).Render(signedMoney(latest.ProfitLoss)+"원")),
+		fmt.Sprintf("  기간 증감    %s", changeText), "",
+		renderPerformanceLineChart(points, contentWidth, chartHeight), "",
+		muted.Render("Tab: 표/그래프 전환   t: 일간 → 주간 → 월간 → 연간"),
+	}
 	return panel.Width(max(76, m.width-4)).Render(strings.Join(lines, "\n"))
 }
 
@@ -1403,7 +1525,7 @@ func detailAnalysis(q domain.Quote) string {
 }
 
 func (m Model) helpView() string {
-	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\n←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지\ngt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n1~6 주요 화면 이동  ? 도움말\n\n내 주식\nTab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동\nt 기본순서→수익률→보유비중 정렬\n상세 차트\nh/l 또는 ←/→ 봉 단위 변경\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
+	return panel.Render("Vim 단축키\n\n↑/↓, j/k 선택      Enter 상세보기      Esc 뒤로/취소\n←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지\ngt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글\nf 시장 필터/보유탭  c USD/KRW 표시 전환\n1~6 주요 화면 이동  ? 도움말\n\n내 주식\nTab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동\nt 기본순서→수익률→보유비중 정렬\n\n성과\nTab 표·그래프 전환    그래프에서 t 일·주·월·연 전환\n\n상세 차트\nh/l 또는 ←/→ 봉 단위 변경\n\n콜론 명령\n:r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료\n\n상세 차트: 틱·1/5/15/60분·일·주·월·년 / MA5·20·60·120\n조회 전용: 주문 기능 및 주문 API 호출 없음")
 }
 
 func (m Model) diagnosticsView() string {
@@ -1433,6 +1555,9 @@ func (m Model) footer() string {
 		return brand.Render(" COMMAND :")
 	}
 	base := " ↑↓/jk 이동  Enter 상세  / 검색  : 명령  ? 도움말"
+	if m.screen == performanceScreen {
+		base = " Tab 표/그래프  t 일/주/월/연  : 명령  ? 도움말"
+	}
 	return muted.Render(base) + "  │  " + m.connectionIndicator()
 }
 

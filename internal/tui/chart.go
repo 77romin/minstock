@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/77romin/minstock-tui/internal/domain"
 	"github.com/NimbleMarkets/ntcharts/v2/canvas"
 	"github.com/NimbleMarkets/ntcharts/v2/canvas/graph"
 	"github.com/NimbleMarkets/ntcharts/v2/canvas/runes"
-	"github.com/77romin/minstock-tui/internal/domain"
 )
 
 var (
@@ -104,6 +105,70 @@ func renderChart(candles []domain.Candle, width, height int, maVisibility ...boo
 	labels[height/2] = fmt.Sprintf(" %10s", commaNumber(fmt.Sprintf("%.0f", (maxPrice+minPrice)/2)))
 	labels[height-1] = fmt.Sprintf(" %10s", commaNumber(fmt.Sprintf("%.0f", minPrice)))
 	return lipgloss.JoinHorizontal(lipgloss.Top, chart.View(), axisStyle.Render(strings.Join(labels, "\n")))
+}
+
+func renderPerformanceLineChart(points []performancePoint, width, height int) string {
+	if len(points) == 0 {
+		return "성과 그래프 데이터가 없습니다."
+	}
+	width = max(30, width)
+	height = max(10, height)
+	plotWidth := max(12, width-16)
+	visible := points
+	if maxPoints := plotWidth - 1; len(visible) > maxPoints {
+		visible = visible[len(visible)-maxPoints:]
+	}
+
+	minValue, maxValue := math.MaxFloat64, -math.MaxFloat64
+	for _, point := range visible {
+		value, _ := point.TotalAssets.Float64()
+		minValue = math.Min(minValue, value)
+		maxValue = math.Max(maxValue, value)
+	}
+	if minValue == maxValue {
+		padding := math.Max(1, math.Abs(minValue)*.01)
+		minValue -= padding
+		maxValue += padding
+	} else {
+		padding := (maxValue - minValue) * .08
+		minValue -= padding
+		maxValue += padding
+	}
+
+	chart := canvas.New(plotWidth, height)
+	graph.DrawXYAxis(&chart, canvas.Point{X: 0, Y: height - 1}, axisStyle)
+	scaleY := func(value float64) int {
+		scaled := (value - minValue) / (maxValue - minValue) * float64(height-2)
+		return max(0, min(height-2, height-2-int(math.Round(scaled))))
+	}
+	chartPoints := make([]canvas.Point, len(visible))
+	for i, point := range visible {
+		x := 1
+		if len(visible) > 1 {
+			x += int(math.Round(float64(i) * float64(plotWidth-2) / float64(len(visible)-1)))
+		}
+		value, _ := point.TotalAssets.Float64()
+		chartPoints[i] = canvas.Point{X: x, Y: scaleY(value)}
+	}
+	if len(chartPoints) == 1 {
+		chart.SetRuneWithStyle(chartPoints[0], '●', neutral)
+	} else {
+		for i := 1; i < len(chartPoints); i++ {
+			delta := visible[i].TotalAssets.Sub(visible[i-1].TotalAssets)
+			graph.DrawLinePoints(&chart, chartPoints[i-1:i+1], runes.ArcLineStyle, performanceValueStyle(delta))
+		}
+	}
+
+	labels := make([]string, height)
+	labels[0] = fmt.Sprintf(" %12s원", commaNumber(fmt.Sprintf("%.0f", maxValue)))
+	labels[height/2] = fmt.Sprintf(" %12s원", commaNumber(fmt.Sprintf("%.0f", (maxValue+minValue)/2)))
+	labels[height-1] = fmt.Sprintf(" %12s원", commaNumber(fmt.Sprintf("%.0f", minValue)))
+	graphView := lipgloss.JoinHorizontal(lipgloss.Top, chart.View(), axisStyle.Render(strings.Join(labels, "\n")))
+	dateRange := visible[0].Date.In(time.Local).Format("2006-01-02")
+	if len(visible) > 1 {
+		dateRange += "  →  " + visible[len(visible)-1].Date.In(time.Local).Format("2006-01-02")
+	}
+	return graphView + "\n" + muted.Render(dateRange)
 }
 
 // drawSmoothMALine renders an interpolated moving average using line glyphs.

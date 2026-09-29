@@ -124,6 +124,25 @@ func TestPerformanceScreenNavigation(t *testing.T) {
 	}
 }
 
+func TestPerformanceScreenSwitchesTableChartAndPeriod(t *testing.T) {
+	m := Model{screen: performanceScreen}
+	next, _ := m.handleKey("tab")
+	m = next.(Model)
+	if m.performance != performanceChart {
+		t.Fatalf("tab performance display=%v", m.performance)
+	}
+	next, _ = m.handleKey("t")
+	m = next.(Model)
+	if m.perfPeriod != performanceWeekly {
+		t.Fatalf("t performance period=%v", m.perfPeriod)
+	}
+	next, _ = m.handleKey("tab")
+	m = next.(Model)
+	if m.performance != performanceTable {
+		t.Fatalf("second tab performance display=%v", m.performance)
+	}
+}
+
 func TestPortfolioViewRendersRequestedColumnsAndWeights(t *testing.T) {
 	profit := decimal.NewFromInt(25000)
 	position := domain.Position{
@@ -279,6 +298,46 @@ func TestPerformanceViewColorsValuesByDirection(t *testing.T) {
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("directional performance value %q missing: %q", want, view)
+		}
+	}
+}
+
+func TestAggregatePerformancePeriodUsesLastValueInEachPeriod(t *testing.T) {
+	loc := time.FixedZone("KST", 9*60*60)
+	point := func(year int, month time.Month, day, value int) performancePoint {
+		return performancePoint{Date: time.Date(year, month, day, 0, 0, 0, 0, loc), TotalAssets: decimal.NewFromInt(int64(value))}
+	}
+	points := []performancePoint{
+		point(2026, time.January, 5, 100),
+		point(2026, time.January, 6, 110),
+		point(2026, time.January, 12, 120),
+		point(2026, time.February, 1, 130),
+		point(2027, time.January, 1, 140),
+	}
+	weekly := aggregatePerformancePeriod(points, performanceWeekly)
+	if len(weekly) != 4 || !weekly[0].TotalAssets.Equal(decimal.NewFromInt(110)) {
+		t.Fatalf("weekly points=%#v", weekly)
+	}
+	monthly := aggregatePerformancePeriod(points, performanceMonthly)
+	if len(monthly) != 3 || !monthly[0].TotalAssets.Equal(decimal.NewFromInt(120)) {
+		t.Fatalf("monthly points=%#v", monthly)
+	}
+	yearly := aggregatePerformancePeriod(points, performanceYearly)
+	if len(yearly) != 2 || !yearly[0].TotalAssets.Equal(decimal.NewFromInt(130)) {
+		t.Fatalf("yearly points=%#v", yearly)
+	}
+}
+
+func TestPerformanceChartViewShowsLineChartSummary(t *testing.T) {
+	loc := time.FixedZone("KST", 9*60*60)
+	m := Model{screen: performanceScreen, performance: performanceChart, width: 120, height: 30, history: []domain.PortfolioSnapshot{
+		{Date: time.Date(2026, 9, 28, 0, 0, 0, 0, loc), Broker: domain.BrokerNH, Currency: domain.KRW, ValueTotalKRW: decimal.NewFromInt(1000)},
+		{Date: time.Date(2026, 9, 29, 0, 0, 0, 0, loc), Broker: domain.BrokerNH, Currency: domain.KRW, ValueTotalKRW: decimal.NewFromInt(1200), ProfitLossKRW: decimal.NewFromInt(50)},
+	}}
+	view := m.performanceView()
+	for _, want := range []string{"그래프", "일간", "기간 증감", "+200원", "+20.00%", "2026-09-28", "2026-09-29"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("performance chart value %q missing: %q", want, view)
 		}
 	}
 }
