@@ -110,7 +110,7 @@ func run(args []string) error {
 	remaining := flags.Args()
 	if len(remaining) > 0 && remaining[0] == "setup" {
 		if len(remaining) != 2 {
-			return errors.New("사용법: minstock setup <kiwoom|nh>")
+			return errors.New("사용법: minstock setup <kiwoom|nh|dividend>")
 		}
 		return setup(remaining[1])
 	}
@@ -164,7 +164,8 @@ func setup(provider string) error {
 		if err := security.SaveAPIKey("alphavantage", string(apiKey)); err != nil {
 			return err
 		}
-		fmt.Println("배당 데이터 API 키를 OS 보안 키링에 저장했습니다.")
+		fmt.Println("배당 데이터 API 키를 OS 보안 키링에 저장하고 재확인했습니다.")
+		fmt.Println("확인: minstock --diagnose")
 		return nil
 	}
 	if provider != "kiwoom" && provider != "nh" {

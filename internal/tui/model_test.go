@@ -170,6 +170,25 @@ func TestDividendTabTogglesHoldingsAndCalendar(t *testing.T) {
 	}
 }
 
+func TestDividendDashboardRefreshDoesNotReloadUnchangedHoldings(t *testing.T) {
+	positions := []domain.Position{{
+		Broker: domain.BrokerNH, Symbol: domain.Symbol{Ticker: "QQQM", Currency: domain.USD},
+		Quantity: decimal.NewFromInt(15), ExchangeRate: decimal.NewFromInt(1360),
+	}}
+	key := dividendHoldingsKey(positions)
+	m := Model{screen: dividendScreen, dividendHoldingsKey: key}
+	next, _ := m.Update(dashboardMsg{snapshot: app.Snapshot{Positions: positions}})
+	if next.(Model).dividendLoading {
+		t.Fatal("unchanged holdings triggered another dividend load")
+	}
+	changed := append([]domain.Position(nil), positions...)
+	changed[0].Quantity = decimal.NewFromInt(16)
+	next, _ = next.(Model).Update(dashboardMsg{snapshot: app.Snapshot{Positions: changed}})
+	if !next.(Model).dividendLoading {
+		t.Fatal("changed holdings did not trigger dividend reload")
+	}
+}
+
 func TestPortfolioViewRendersRequestedColumnsAndWeights(t *testing.T) {
 	profit := decimal.NewFromInt(25000)
 	position := domain.Position{

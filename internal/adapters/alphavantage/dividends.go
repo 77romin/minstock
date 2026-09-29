@@ -74,7 +74,7 @@ func (c *Client) Dividends(ctx context.Context, symbol string) ([]domain.Dividen
 		return nil, err
 	}
 	if message := firstNonEmpty(payload.Error, payload.Note, payload.Information); message != "" {
-		return nil, errors.New(message)
+		return nil, errors.New(readableProviderError(message))
 	}
 	result := make([]domain.DividendEvent, 0, len(payload.Data))
 	for _, item := range payload.Data {
@@ -90,6 +90,21 @@ func (c *Client) Dividends(ctx context.Context, symbol string) ([]domain.Dividen
 		})
 	}
 	return result, nil
+}
+
+func readableProviderError(message string) string {
+	message = strings.TrimSpace(message)
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "rate limit") || strings.Contains(lower, "25 requests"):
+		return "Alpha Vantage 일일 호출 한도를 초과했습니다"
+	case strings.Contains(lower, "api key") && (strings.Contains(lower, "invalid") || strings.Contains(lower, "claim your free")):
+		return "Alpha Vantage API 키가 유효하지 않습니다"
+	case strings.Contains(lower, "premium"):
+		return "Alpha Vantage 구독 범위에서 지원되지 않는 요청입니다"
+	default:
+		return message
+	}
 }
 
 func parseDate(value string) time.Time {

@@ -21,6 +21,8 @@ type Service struct {
 	watchlists  []ports.WatchlistReader
 	fx          []ports.FXProvider
 	dividends   ports.DividendProvider
+	dividendMu  sync.Mutex
+	dividendRun map[string]*dividendCall
 }
 
 type Snapshot struct {

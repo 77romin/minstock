@@ -74,42 +74,43 @@ var intervals = []domain.CandleInterval{
 }
 
 type Model struct {
-	service         *app.Service
-	mode            string
-	screen          screen
-	previous        screen
-	width, height   int
-	cursor          int
-	loading         bool
-	err             error
-	snapshot        app.Snapshot
-	history         []domain.PortfolioSnapshot
-	dividends       app.DividendReport
-	query           string
-	results         []domain.Symbol
-	selected        domain.Symbol
-	candles         []domain.Candle
-	detailQuote     domain.Quote
-	intervalIndex   int
-	maVisible       [4]bool
-	refreshEvery    time.Duration
-	filter          marketFilter
-	portfolioTab    marketFilter
-	portfolioCol    int
-	portfolioSort   int
-	currency        currencyDisplay
-	performance     performanceDisplay
-	perfPeriod      performancePeriod
-	dividendDisplay dividendDisplay
-	commandMode     bool
-	pendingG        bool
-	searchEditing   bool
-	notice          string
-	refreshing      bool
-	enriching       bool
-	syncing         bool
-	liveLoaded      bool
-	dividendLoading bool
+	service             *app.Service
+	mode                string
+	screen              screen
+	previous            screen
+	width, height       int
+	cursor              int
+	loading             bool
+	err                 error
+	snapshot            app.Snapshot
+	history             []domain.PortfolioSnapshot
+	dividends           app.DividendReport
+	query               string
+	results             []domain.Symbol
+	selected            domain.Symbol
+	candles             []domain.Candle
+	detailQuote         domain.Quote
+	intervalIndex       int
+	maVisible           [4]bool
+	refreshEvery        time.Duration
+	filter              marketFilter
+	portfolioTab        marketFilter
+	portfolioCol        int
+	portfolioSort       int
+	currency            currencyDisplay
+	performance         performanceDisplay
+	perfPeriod          performancePeriod
+	dividendDisplay     dividendDisplay
+	commandMode         bool
+	pendingG            bool
+	searchEditing       bool
+	notice              string
+	refreshing          bool
+	enriching           bool
+	syncing             bool
+	liveLoaded          bool
+	dividendLoading     bool
+	dividendHoldingsKey string
 }
 
 type cachedDashboardMsg struct {
@@ -268,7 +269,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshing, m.enriching, m.liveLoaded = false, true, true
 		m.notice = "계좌 갱신 완료 · 시세 보강 중"
 		commands := []tea.Cmd{m.enrichmentCmd(msg.snapshot), m.performanceCmd()}
-		if m.screen == dividendScreen {
+		key := dividendHoldingsKey(msg.snapshot.Positions)
+		if m.screen == dividendScreen && key != m.dividendHoldingsKey {
+			m.dividendHoldingsKey = key
 			m.dividendLoading = true
 			commands = append(commands, m.dividendCmd())
 		}
@@ -449,6 +452,7 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		m.screen, m.cursor = performanceScreen, 0
 	case "7":
 		m.screen, m.cursor, m.dividendLoading = dividendScreen, 0, true
+		m.dividendHoldingsKey = dividendHoldingsKey(m.snapshot.Positions)
 		return m, m.dividendCmd()
 	case "m":
 		return m.toggleWatchlist()
@@ -583,6 +587,7 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 			m.screen, m.cursor = performanceScreen, 0
 		case "7":
 			m.screen, m.cursor, m.dividendLoading = dividendScreen, 0, true
+			m.dividendHoldingsKey = dividendHoldingsKey(m.snapshot.Positions)
 			return m, m.dividendCmd()
 		case "/":
 			m.searchEditing = true
@@ -1757,6 +1762,9 @@ func (m Model) dividendView() string {
 		fmt.Sprintf("  세후 원화환산   %s원", money(report.NetAnnualKRW)),
 		fmt.Sprintf("  데이터          %s · %s", report.Source, freshness), "",
 	}
+	if len(report.Warnings) > 0 {
+		lines = append(lines, statusWait.Render(fmt.Sprintf("  조회 경고        %d종목 · 아래 오류를 확인하세요", len(report.Warnings))), "")
+	}
 	if m.dividendDisplay == dividendCalendar {
 		lines = append(lines, muted.Render(" 종목별 ")+"  "+selected.Render(" 월별 ")+"    "+muted.Render("Tab: 보기 전환"), "", "월별 예상 배당 · 향후 12개월")
 		if len(report.Months) == 0 {
@@ -1815,6 +1823,22 @@ func (m Model) dividendView() string {
 		lines = append(lines, muted.Render("경고: "+strings.Join(report.Warnings, " · ")))
 	}
 	return panel.Width(max(76, m.width-4)).Render(strings.Join(lines, "\n"))
+}
+
+func dividendHoldingsKey(positions []domain.Position) string {
+	parts := make([]string, 0, len(positions))
+	for _, position := range positions {
+		if position.Symbol.Currency != domain.USD || !position.Quantity.IsPositive() {
+			continue
+		}
+		symbol := strings.ToUpper(strings.TrimSpace(position.Symbol.Ticker))
+		if symbol == "" {
+			symbol = strings.ToUpper(strings.TrimSpace(position.Symbol.Code))
+		}
+		parts = append(parts, fmt.Sprintf("%s:%s:%s:%s", position.Broker, symbol, position.Quantity, position.ExchangeRate))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "|")
 }
 
 func (m Model) detailView() string {

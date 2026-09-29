@@ -305,6 +305,10 @@ minstock sync
 minstock
 ```
 
+`minstock setup dividend`는 Alpha Vantage 키를 OS 키링에 영구 저장하고 즉시 다시 읽어
+저장 성공 여부를 검증합니다. `ALPHAVANTAGE_API_KEY` 환경변수는 해당 셸에서만 유지될 수
+있으므로 상시 사용에는 setup 명령을 권장합니다.
+
 CI나 일시적인 셸에서는 환경변수도 사용할 수 있습니다.
 
 ```sh

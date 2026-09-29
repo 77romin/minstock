@@ -13,7 +13,11 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-const dividendCacheTTL = 24 * time.Hour
+const (
+	dividendCacheTTL      = 24 * time.Hour
+	dividendFailureTTL    = 15 * time.Minute
+	dividendFailurePrefix = "dividend-failure:v1:"
+)
 
 var usDividendTaxRate = decimal.RequireFromString("0.15")
 
@@ -46,6 +50,18 @@ type DividendReport struct {
 	Freshness    domain.Freshness
 	AsOf         time.Time
 	Warnings     []string
+}
+
+type dividendCall struct {
+	done      chan struct{}
+	events    []domain.DividendEvent
+	freshness domain.Freshness
+	asOf      time.Time
+	err       error
+}
+
+type dividendFailure struct {
+	Message string `json:"message"`
 }
 
 func (s *Service) SetDividendProvider(provider ports.DividendProvider) {
@@ -96,6 +112,9 @@ func (s *Service) DividendPortfolio(ctx context.Context, positions []domain.Posi
 		if err != nil {
 			report.Warnings = append(report.Warnings, symbol+": "+err.Error())
 			continue
+		}
+		if report.Source == "미설정" && len(events) > 0 && strings.TrimSpace(events[0].Provider) != "" {
+			report.Source = events[0].Provider + " (현재 키 미설정)"
 		}
 		report.Freshness = mergeDividendFreshness(report.Freshness, freshness)
 		if report.AsOf.IsZero() || (!asOf.IsZero() && asOf.Before(report.AsOf)) {
@@ -157,21 +176,80 @@ func (s *Service) loadDividendEvents(ctx context.Context, symbol string) ([]doma
 		}
 		return nil, domain.FreshCached, time.Time{}, fmt.Errorf("배당 API 키가 없습니다: minstock setup dividend")
 	}
+	if failure, failedAt, ok := s.recentDividendFailure(ctx, symbol); ok {
+		if cacheValid {
+			return cached, domain.FreshCached, updatedAt, nil
+		}
+		remaining := dividendFailureTTL - time.Since(failedAt)
+		return nil, "", failedAt, fmt.Errorf("최근 조회 실패: %s (약 %d분 후 재시도)", failure, max(1, int(remaining.Minutes())+1))
+	}
+	return s.fetchDividendEvents(ctx, symbol, key, cached, updatedAt, cacheValid)
+}
+
+func (s *Service) fetchDividendEvents(ctx context.Context, symbol, cacheKey string, cached []domain.DividendEvent, updatedAt time.Time, cacheValid bool) ([]domain.DividendEvent, domain.Freshness, time.Time, error) {
+	s.dividendMu.Lock()
+	if s.dividendRun == nil {
+		s.dividendRun = make(map[string]*dividendCall)
+	}
+	if running := s.dividendRun[symbol]; running != nil {
+		s.dividendMu.Unlock()
+		select {
+		case <-running.done:
+			return running.events, running.freshness, running.asOf, running.err
+		case <-ctx.Done():
+			return nil, "", time.Time{}, ctx.Err()
+		}
+	}
+	call := &dividendCall{done: make(chan struct{})}
+	s.dividendRun[symbol] = call
+	s.dividendMu.Unlock()
+
+	defer func() {
+		s.dividendMu.Lock()
+		delete(s.dividendRun, symbol)
+		close(call.done)
+		s.dividendMu.Unlock()
+	}()
 	events, err := s.dividends.Dividends(ctx, symbol)
 	if err != nil {
+		call.err = err
+		s.saveDividendFailure(ctx, symbol, err)
 		if cacheValid {
+			call.events, call.freshness, call.asOf = cached, domain.FreshCached, updatedAt
+			call.err = nil
 			return cached, domain.FreshCached, updatedAt, nil
 		}
 		return nil, "", time.Time{}, err
 	}
-	payload, err = json.Marshal(events)
+	payload, err := json.Marshal(events)
 	if err == nil {
-		err = s.repo.SaveCache(ctx, key, payload)
+		err = s.repo.SaveCache(ctx, cacheKey, payload)
 	}
 	if err != nil {
+		call.err = err
 		return nil, "", time.Time{}, err
 	}
-	return events, domain.FreshLive, time.Now(), nil
+	call.events, call.freshness, call.asOf = events, domain.FreshLive, time.Now()
+	return call.events, domain.FreshLive, call.asOf, nil
+}
+
+func (s *Service) recentDividendFailure(ctx context.Context, symbol string) (string, time.Time, bool) {
+	payload, updatedAt, err := s.repo.LoadCache(ctx, dividendFailurePrefix+symbol)
+	if err != nil || time.Since(updatedAt) >= dividendFailureTTL {
+		return "", time.Time{}, false
+	}
+	var failure dividendFailure
+	if json.Unmarshal(payload, &failure) != nil || strings.TrimSpace(failure.Message) == "" {
+		return "", time.Time{}, false
+	}
+	return failure.Message, updatedAt, true
+}
+
+func (s *Service) saveDividendFailure(ctx context.Context, symbol string, loadErr error) {
+	payload, err := json.Marshal(dividendFailure{Message: loadErr.Error()})
+	if err == nil {
+		_ = s.repo.SaveCache(ctx, dividendFailurePrefix+symbol, payload)
+	}
 }
 
 func dividendEventDate(event domain.DividendEvent) time.Time {

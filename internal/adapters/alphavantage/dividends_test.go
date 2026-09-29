@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/77romin/minstock-tui/internal/domain"
@@ -44,7 +45,7 @@ func TestDividendsReturnsProviderMessage(t *testing.T) {
 	}))
 	defer server.Close()
 	client, _ := New(server.URL, "secret")
-	if _, err := client.Dividends(t.Context(), "QQQ"); err == nil {
-		t.Fatal("provider error message was ignored")
+	if _, err := client.Dividends(t.Context(), "QQQ"); err == nil || !strings.Contains(err.Error(), "호출 한도") {
+		t.Fatalf("provider error message was not normalized: %v", err)
 	}
 }
