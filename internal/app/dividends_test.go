@@ -76,6 +76,72 @@ func TestDividendPortfolioCalculatesTaxKRWAndUsesDailyCache(t *testing.T) {
 	}
 }
 
+func TestDividendPortfolioReusesDailyCacheAfterRestart(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "minstock.db")
+	positions := []domain.Position{{
+		Broker: domain.BrokerNH, Symbol: domain.Symbol{Ticker: "VOO", Currency: domain.USD},
+		Quantity: decimal.NewFromInt(2), ExchangeRate: decimal.NewFromInt(1400),
+	}}
+
+	firstRepo, err := db.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstRepo.Migrate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	firstProvider := &dividendProviderStub{}
+	firstService := New(firstRepo, nil, nil, nil, nil)
+	firstService.SetDividendProvider(firstProvider)
+	first := firstService.DividendPortfolio(t.Context(), positions, domain.FXRate{})
+	if firstProvider.calls.Load() != 1 || len(first.Holdings) != 1 {
+		t.Fatalf("initial dividend load calls=%d report=%#v", firstProvider.calls.Load(), first)
+	}
+	if err := firstRepo.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondRepo, err := db.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondRepo.Close()
+	if err := secondRepo.Migrate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	secondProvider := &dividendProviderStub{}
+	secondService := New(secondRepo, nil, nil, nil, nil)
+	secondService.SetDividendProvider(secondProvider)
+	second := secondService.DividendPortfolio(t.Context(), positions, domain.FXRate{})
+	if secondProvider.calls.Load() != 0 || second.Freshness != domain.FreshCached || !second.NetAnnual.Equal(first.NetAnnual) {
+		t.Fatalf("restart did not reuse persistent cache: calls=%d report=%#v", secondProvider.calls.Load(), second)
+	}
+}
+
+func TestCachedDividendPortfolioNeverCallsProvider(t *testing.T) {
+	repo, err := db.Open(filepath.Join(t.TempDir(), "minstock.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	if err := repo.Migrate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	provider := &dividendProviderStub{}
+	service := New(repo, nil, nil, nil, nil)
+	service.SetDividendProvider(provider)
+	positions := []domain.Position{{Symbol: domain.Symbol{Ticker: "IVV", Currency: domain.USD}, Quantity: decimal.NewFromInt(1)}}
+
+	cached := service.CachedDividendPortfolio(t.Context(), positions, domain.FXRate{})
+	if provider.calls.Load() != 0 || len(cached.Warnings) != 1 {
+		t.Fatalf("cache-only startup load called provider: calls=%d report=%#v", provider.calls.Load(), cached)
+	}
+	fresh := service.DividendPortfolio(t.Context(), positions, domain.FXRate{})
+	if provider.calls.Load() != 1 || len(fresh.Holdings) != 1 {
+		t.Fatalf("regular load did not fetch missing cache: calls=%d report=%#v", provider.calls.Load(), fresh)
+	}
+}
+
 func TestDividendPortfolioDoesNotUseAnotherBrokersFX(t *testing.T) {
 	repo, err := db.Open(filepath.Join(t.TempDir(), "minstock.db"))
 	if err != nil {

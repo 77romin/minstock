@@ -132,6 +132,10 @@ type performanceMsg struct {
 	err     error
 }
 type dividendMsg struct{ report app.DividendReport }
+type cachedDividendMsg struct {
+	report      app.DividendReport
+	holdingsKey string
+}
 type allocationMsg struct {
 	report app.AllocationReport
 	err    error
@@ -212,6 +216,18 @@ func (m Model) dividendCmd() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		return dividendMsg{report: m.service.DividendPortfolio(ctx, m.snapshot.Positions, m.snapshot.FX)}
+	}
+}
+
+func (m Model) cachedDividendCmd(snapshot app.Snapshot) tea.Cmd {
+	holdingsKey := dividendHoldingsKey(snapshot.Positions)
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		return cachedDividendMsg{
+			report:      m.service.CachedDividendPortfolio(ctx, snapshot.Positions, snapshot.FX),
+			holdingsKey: holdingsKey,
+		}
 	}
 }
 
@@ -306,6 +322,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil && !m.liveLoaded {
 			m.snapshot = msg.snapshot
 			m.notice = "캐시 표시 · 최신 데이터 확인 중"
+			m.dividendHoldingsKey = dividendHoldingsKey(msg.snapshot.Positions)
+			if m.dividendHoldingsKey != "" {
+				return m, m.cachedDividendCmd(msg.snapshot)
+			}
 		} else if msg.err != nil && !m.syncing {
 			// A first run has no cache or instrument index yet. Populate it once;
 			// subsequent starts use the cache and skip this expensive operation.
@@ -331,8 +351,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		key := dividendHoldingsKey(msg.snapshot.Positions)
 		if m.screen == dividendScreen && key != m.dividendHoldingsKey {
 			m.dividendHoldingsKey = key
-			m.dividendLoading = true
+			m.dividendLoading = len(m.dividends.Holdings) == 0
 			commands = append(commands, m.dividendCmd())
+		} else if m.screen != dividendScreen {
+			m.dividendHoldingsKey = key
 		}
 		if m.screen == allocationScreen && !m.allocationDirty && !m.allocationEditing && !m.allocationAdding && !m.allocationPending {
 			commands = append(commands, m.allocationCmd())
@@ -349,6 +371,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case dividendMsg:
 		m.dividends, m.dividendLoading = msg.report, false
+	case cachedDividendMsg:
+		if msg.holdingsKey == m.dividendHoldingsKey && len(m.dividends.Holdings) == 0 && len(msg.report.Holdings) > 0 {
+			m.dividends = msg.report
+		}
 	case allocationMsg:
 		if msg.report.Scope != "" && msg.report.Scope != m.allocationScopeName() {
 			break
@@ -552,7 +578,7 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case "6":
 		m.screen, m.cursor = performanceScreen, 0
 	case "7":
-		m.screen, m.cursor, m.dividendLoading = dividendScreen, 0, true
+		m.screen, m.cursor, m.dividendLoading = dividendScreen, 0, len(m.dividends.Holdings) == 0
 		m.dividendHoldingsKey = dividendHoldingsKey(m.snapshot.Positions)
 		return m, m.dividendCmd()
 	case "8":
@@ -761,7 +787,7 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 		case "6":
 			m.screen, m.cursor = performanceScreen, 0
 		case "7":
-			m.screen, m.cursor, m.dividendLoading = dividendScreen, 0, true
+			m.screen, m.cursor, m.dividendLoading = dividendScreen, 0, len(m.dividends.Holdings) == 0
 			m.dividendHoldingsKey = dividendHoldingsKey(m.snapshot.Positions)
 			return m, m.dividendCmd()
 		case "8":

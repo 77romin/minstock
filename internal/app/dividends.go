@@ -70,6 +70,17 @@ func (s *Service) SetDividendProvider(provider ports.DividendProvider) {
 }
 
 func (s *Service) DividendPortfolio(ctx context.Context, positions []domain.Position, fx domain.FXRate) DividendReport {
+	return s.dividendPortfolio(ctx, positions, fx, true)
+}
+
+// CachedDividendPortfolio builds a report exclusively from the persistent
+// SQLite cache. It is used during startup so opening the dividend screen does
+// not have to wait for network access or trigger a provider request.
+func (s *Service) CachedDividendPortfolio(ctx context.Context, positions []domain.Position, fx domain.FXRate) DividendReport {
+	return s.dividendPortfolio(ctx, positions, fx, false)
+}
+
+func (s *Service) dividendPortfolio(ctx context.Context, positions []domain.Position, fx domain.FXRate, allowFetch bool) DividendReport {
 	type heldPosition struct {
 		name      string
 		positions []domain.Position
@@ -109,7 +120,7 @@ func (s *Service) DividendPortfolio(ctx context.Context, positions []domain.Posi
 	sort.Strings(symbols)
 	for _, symbol := range symbols {
 		held := bySymbol[symbol]
-		events, freshness, asOf, err := s.loadDividendEvents(ctx, symbol)
+		events, freshness, asOf, err := s.loadDividendEvents(ctx, symbol, allowFetch)
 		if err != nil {
 			report.Warnings = append(report.Warnings, symbol+": "+err.Error())
 			continue
@@ -160,7 +171,7 @@ func (s *Service) DividendPortfolio(ctx context.Context, positions []domain.Posi
 	return report
 }
 
-func (s *Service) loadDividendEvents(ctx context.Context, symbol string) ([]domain.DividendEvent, domain.Freshness, time.Time, error) {
+func (s *Service) loadDividendEvents(ctx context.Context, symbol string, allowFetch bool) ([]domain.DividendEvent, domain.Freshness, time.Time, error) {
 	key := "dividends:v1:" + symbol
 	payload, updatedAt, cacheErr := s.repo.LoadCache(ctx, key)
 	var cached []domain.DividendEvent
@@ -170,6 +181,12 @@ func (s *Service) loadDividendEvents(ctx context.Context, symbol string) ([]doma
 		if cacheValid && time.Since(updatedAt) < dividendCacheTTL {
 			return cached, domain.FreshCached, updatedAt, nil
 		}
+	}
+	if !allowFetch {
+		if cacheValid {
+			return cached, domain.FreshCached, updatedAt, nil
+		}
+		return nil, domain.FreshCached, time.Time{}, fmt.Errorf("저장된 배당 캐시가 없습니다")
 	}
 	if s.dividends == nil {
 		if cacheValid {

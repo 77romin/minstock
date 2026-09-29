@@ -137,6 +137,29 @@ func TestDividendScreenNavigation(t *testing.T) {
 	}
 }
 
+func TestDividendScreenKeepsPreloadedCacheVisibleWhileRefreshing(t *testing.T) {
+	m := Model{
+		screen:    dashboardScreen,
+		dividends: app.DividendReport{Holdings: []app.DividendHolding{{Symbol: "VOO"}}},
+	}
+	next, cmd := m.handleKey("7")
+	got := next.(Model)
+	if got.screen != dividendScreen || got.dividendLoading || cmd == nil {
+		t.Fatalf("preloaded dividend navigation screen=%v loading=%v cmd=%v", got.screen, got.dividendLoading, cmd)
+	}
+}
+
+func TestCachedDividendMessageIgnoresDifferentHoldings(t *testing.T) {
+	m := Model{dividendHoldingsKey: "NH:VOO:1:1400"}
+	next, _ := m.Update(cachedDividendMsg{
+		holdingsKey: "NH:IVV:1:1400",
+		report:      app.DividendReport{Holdings: []app.DividendHolding{{Symbol: "IVV"}}},
+	})
+	if len(next.(Model).dividends.Holdings) != 0 {
+		t.Fatalf("stale startup dividend cache was applied: %#v", next.(Model).dividends)
+	}
+}
+
 func TestPerformanceScreenSwitchesTableChartAndPeriod(t *testing.T) {
 	m := Model{screen: performanceScreen}
 	next, _ := m.handleKey("tab")
