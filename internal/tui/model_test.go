@@ -242,6 +242,31 @@ func TestDashboardIncludesNHUSBalanceWithoutKiwoom(t *testing.T) {
 			t.Fatalf("NH-only dashboard value %q missing: %q", want, view)
 		}
 	}
+	if !strings.Contains(view, positive.Render("+190,000원")) {
+		t.Fatalf("positive total profit is not red: %q", view)
+	}
+	if !strings.Contains(view, positive.Render("+$100.00")) {
+		t.Fatalf("positive US profit is not red: %q", view)
+	}
+}
+
+func TestDashboardColorsNegativeAndZeroProfit(t *testing.T) {
+	negativeView := (Model{width: 100, snapshot: app.Snapshot{Balances: []domain.Balance{
+		{Broker: domain.BrokerNH, Currency: domain.KRW, ProfitLoss: decimal.NewFromInt(-10)},
+		{Broker: domain.BrokerNH, Currency: domain.USD, ProfitLoss: decimal.NewFromInt(-2), ProfitLossKRW: decimal.NewFromInt(-2800)},
+	}}}).dashboardView()
+	for _, want := range []string{negative.Render("-2,810원"), negative.Render("-$2.00")} {
+		if !strings.Contains(negativeView, want) {
+			t.Fatalf("negative dashboard profit %q missing: %q", want, negativeView)
+		}
+	}
+
+	zeroView := (Model{width: 100}).dashboardView()
+	for _, want := range []string{neutral.Render("0원"), neutral.Render("$0.00")} {
+		if !strings.Contains(zeroView, want) {
+			t.Fatalf("zero dashboard profit %q missing: %q", want, zeroView)
+		}
+	}
 }
 
 func TestPerformanceViewAggregatesCurrenciesByDate(t *testing.T) {

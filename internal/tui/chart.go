@@ -155,7 +155,7 @@ func renderPerformanceLineChart(points []performancePoint, width, height int) st
 	} else {
 		for i := 1; i < len(chartPoints); i++ {
 			delta := visible[i].TotalAssets.Sub(visible[i-1].TotalAssets)
-			graph.DrawLinePoints(&chart, chartPoints[i-1:i+1], runes.ArcLineStyle, performanceValueStyle(delta))
+			graph.DrawLinePoints(&chart, chartPoints[i-1:i+1], runes.ArcLineStyle, directionalValueStyle(delta))
 		}
 	}
 

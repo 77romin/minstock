@@ -911,7 +911,9 @@ func (m Model) dashboardView() string {
 	if !m.snapshot.FX.Rate.IsZero() {
 		fx = m.snapshot.FX.Rate.StringFixed(2) + "원"
 	}
-	left := panel.Width(max(28, m.width/2-4)).Render(fmt.Sprintf("통합 자산\n\n  원화환산  %s원\n  평가손익  %s원\n  미국자산  $%s\n  미국손익  %s\n  USD/KRW   %s", money(totalValue), signedMoney(totalProfit), usdValue.StringFixed(2), signedUSD(usdProfit), fx))
+	totalProfitText := directionalValueStyle(totalProfit).Render(signedMoney(totalProfit) + "원")
+	usdProfitText := directionalValueStyle(usdProfit).Render(signedUSD(usdProfit))
+	left := panel.Width(max(28, m.width/2-4)).Render(fmt.Sprintf("통합 자산\n\n  원화환산  %s원\n  평가손익  %s\n  미국자산  $%s\n  미국손익  %s\n  USD/KRW   %s", money(totalValue), totalProfitText, usdValue.StringFixed(2), usdProfitText, fx))
 	var status []string
 	for _, s := range m.snapshot.Statuses {
 		mark := "○"
@@ -1138,7 +1140,7 @@ func profitStyle(value decimal.Decimal) lipgloss.Style {
 	return lipgloss.NewStyle()
 }
 
-func performanceValueStyle(value decimal.Decimal) lipgloss.Style {
+func directionalValueStyle(value decimal.Decimal) lipgloss.Style {
 	if value.IsPositive() {
 		return positive
 	}
@@ -1350,14 +1352,14 @@ func (m Model) performanceTableView() string {
 		if !previous.TotalAssets.IsZero() {
 			changeRate = change.Div(previous.TotalAssets).Mul(decimal.NewFromInt(100))
 		}
-		style := performanceValueStyle(change)
+		style := directionalValueStyle(change)
 		comparison = fmt.Sprintf("%s (%s)", style.Render(signedMoney(change)+"원"), style.Render(signedPercent(changeRate)))
 	}
 	lines := []string{
 		fmt.Sprintf("포트폴리오 성과 · 원화 기준 · %d일 기록", len(points)), "",
 		selected.Render(" 표 ") + "  " + muted.Render(" 그래프 ") + "    " + muted.Render("Tab: 보기 전환"), "",
 		fmt.Sprintf("  총자산       %s원", money(latest.TotalAssets)),
-		fmt.Sprintf("  평가손익     %s", performanceValueStyle(latest.ProfitLoss).Render(signedMoney(latest.ProfitLoss)+"원")),
+		fmt.Sprintf("  평가손익     %s", directionalValueStyle(latest.ProfitLoss).Render(signedMoney(latest.ProfitLoss)+"원")),
 		fmt.Sprintf("  전 기록 대비 %s", comparison), "",
 	}
 	wide := m.width >= 110
@@ -1381,8 +1383,8 @@ func (m Model) performanceTableView() string {
 		}
 		dateCell := fitCell(point.Date.In(time.Local).Format("2006-01-02"), 10, false)
 		assetCell := fitCell(money(point.TotalAssets)+"원", 16, true)
-		profitCell := performanceValueStyle(point.ProfitLoss).Render(fitCell(signedMoney(point.ProfitLoss)+"원", 16, true))
-		deltaStyle := performanceValueStyle(delta)
+		profitCell := directionalValueStyle(point.ProfitLoss).Render(fitCell(signedMoney(point.ProfitLoss)+"원", 16, true))
+		deltaStyle := directionalValueStyle(delta)
 		rateCell := deltaStyle.Render(fitCell(rateText, 10, true))
 		var line string
 		if wide {
@@ -1439,7 +1441,7 @@ func (m Model) performanceChartView() string {
 	}
 	changeText := "비교 기록 필요"
 	if len(points) > 1 {
-		style := performanceValueStyle(change)
+		style := directionalValueStyle(change)
 		changeText = fmt.Sprintf("%s (%s)", style.Render(signedMoney(change)+"원"), style.Render(signedPercent(changeRate)))
 	}
 	periodTabs := make([]string, 0, 4)
@@ -1456,7 +1458,7 @@ func (m Model) performanceChartView() string {
 		fmt.Sprintf("포트폴리오 성과 · 원화 기준 · %d일 기록", len(allPoints)),
 		muted.Render(" 표 ") + "  " + selected.Render(" 그래프 ") + "    " + strings.Join(periodTabs, " "), "",
 		fmt.Sprintf("  총자산       %s원", money(latest.TotalAssets)),
-		fmt.Sprintf("  평가손익     %s", performanceValueStyle(latest.ProfitLoss).Render(signedMoney(latest.ProfitLoss)+"원")),
+		fmt.Sprintf("  평가손익     %s", directionalValueStyle(latest.ProfitLoss).Render(signedMoney(latest.ProfitLoss)+"원")),
 		fmt.Sprintf("  기간 증감    %s", changeText), "",
 		renderPerformanceLineChart(points, contentWidth, chartHeight), "",
 		muted.Render("Tab: 표/그래프 전환   t: 일간 → 주간 → 월간 → 연간"),
