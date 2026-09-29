@@ -186,8 +186,43 @@ func TestAllocationInputUpdatesTargetAndStatus(t *testing.T) {
 	if m.allocationEditing || !m.allocation.Rows[0].Target.TargetPercent.Equal(decimal.NewFromInt(75)) {
 		t.Fatalf("target not updated: %#v", m.allocation)
 	}
+	if !m.allocationDirty {
+		t.Fatal("edited allocation must remain dirty until saved")
+	}
 	if view := m.allocationView(); !strings.Contains(view, "+5.00%") || !strings.Contains(view, "초과") {
 		t.Fatalf("updated deviation missing: %q", view)
+	}
+}
+
+func TestAllocationCopyCurrentCorrectsRoundingToOneHundred(t *testing.T) {
+	m := Model{screen: allocationScreen, allocation: app.AllocationReport{Rows: []app.AllocationRow{
+		{CurrentPercent: decimal.RequireFromString("33.333333")},
+		{CurrentPercent: decimal.RequireFromString("33.333333")},
+		{Target: domain.AllocationTarget{Cash: true}, CurrentPercent: decimal.RequireFromString("33.333334")},
+	}}}
+	next, _ := m.handleKey("r")
+	m = next.(Model)
+	total := decimal.Zero
+	for _, row := range m.allocation.Rows {
+		total = total.Add(row.Target.TargetPercent)
+	}
+	if !total.Equal(decimal.NewFromInt(100)) || !m.allocationDirty {
+		t.Fatalf("copied target total=%s dirty=%v rows=%#v", total, m.allocationDirty, m.allocation.Rows)
+	}
+}
+
+func TestAddedAllocationSurvivesBackgroundReload(t *testing.T) {
+	m := Model{screen: allocationScreen}
+	ivv := domain.Symbol{Code: "IVV", Ticker: "IVV", Name: "iShares Core S&P 500", Market: domain.MarketUS, Currency: domain.USD}
+	next, _ := m.Update(allocationSymbolMsg{symbol: ivv})
+	m = next.(Model)
+	if len(m.allocation.Rows) != 1 || !m.allocationDirty {
+		t.Fatalf("IVV was not added as dirty edit: %#v", m)
+	}
+	next, _ = m.Update(allocationMsg{report: app.AllocationReport{Scope: "ALL"}})
+	m = next.(Model)
+	if len(m.allocation.Rows) != 1 || m.allocation.Rows[0].Target.Symbol.Ticker != "IVV" {
+		t.Fatalf("background reload removed unsaved IVV: %#v", m.allocation.Rows)
 	}
 }
 
