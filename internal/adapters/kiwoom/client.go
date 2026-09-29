@@ -260,7 +260,7 @@ func (c *Client) Balance(ctx context.Context, accountID string) (domain.Balance,
 	if err != nil {
 		return domain.Balance{}, err
 	}
-	return domain.Balance{AccountID: accountID, Broker: c.ID(), Currency: domain.KRW, PurchaseTotal: num(out.Purchase), ValueTotal: num(out.Value), ProfitLoss: signed(out.Profit), ProfitRate: signed(out.Rate), Cash: num(out.Assets).Sub(num(out.Value)), AsOf: time.Now()}, nil
+	return domain.Balance{AccountID: accountID, Broker: c.ID(), Currency: domain.KRW, PurchaseTotal: num(out.Purchase), ValueTotal: num(out.Value), ProfitLoss: signed(out.Profit), ProfitRate: signed(out.Rate), Cash: num(out.Assets).Sub(num(out.Value)), AsOf: time.Now(), Freshness: domain.FreshLive}, nil
 }
 
 func (c *Client) Positions(ctx context.Context, accountID string) ([]domain.Position, error) {
@@ -274,7 +274,7 @@ func (c *Client) Positions(ctx context.Context, accountID string) ([]domain.Posi
 	positions := make([]domain.Position, 0, len(out.Positions))
 	for _, p := range out.Positions {
 		code := strings.TrimPrefix(strings.TrimSpace(p.Code), "A")
-		positions = append(positions, domain.Position{AccountID: accountID, Broker: c.ID(), Symbol: domain.Symbol{Code: code, Ticker: code, Name: p.Name, Market: domain.MarketKRX, Currency: domain.KRW}, Quantity: num(p.Quantity), Tradable: num(p.Tradable), AveragePrice: num(p.Average), CurrentPrice: num(p.Price), PurchaseValue: num(p.Purchase), MarketValue: num(p.Value), ProfitLoss: signed(p.Profit), ProfitRate: signed(p.Rate), AsOf: time.Now()})
+		positions = append(positions, domain.Position{AccountID: accountID, Broker: c.ID(), Symbol: domain.Symbol{Code: code, Ticker: code, Name: p.Name, Market: domain.MarketKRX, Currency: domain.KRW}, Quantity: num(p.Quantity), Tradable: num(p.Tradable), AveragePrice: num(p.Average), CurrentPrice: num(p.Price), PurchaseValue: num(p.Purchase), MarketValue: num(p.Value), ProfitLoss: signed(p.Profit), ProfitRate: signed(p.Rate), AsOf: time.Now(), Freshness: domain.FreshLive})
 	}
 	return positions, nil
 }
@@ -335,7 +335,7 @@ func (c *Client) usBalance(ctx context.Context, accountID string) (domain.Balanc
 	if num(out.Value).IsPositive() && num(out.ValueKRW).IsPositive() {
 		rate = num(out.ValueKRW).Div(num(out.Value))
 	}
-	return domain.Balance{AccountID: accountID, Broker: c.ID(), Currency: domain.USD, Cash: cash, PurchaseTotal: num(out.Purchase), ValueTotal: num(out.Value), ProfitLoss: signed(out.Profit), ProfitRate: signed(out.Rate), PurchaseTotalKRW: num(out.PurchaseKRW), ValueTotalKRW: num(out.ValueKRW), ProfitLossKRW: signed(out.ProfitKRW), ExchangeRate: rate, AsOf: time.Now()}, nil
+	return domain.Balance{AccountID: accountID, Broker: c.ID(), Currency: domain.USD, Cash: cash, PurchaseTotal: num(out.Purchase), ValueTotal: num(out.Value), ProfitLoss: signed(out.Profit), ProfitRate: signed(out.Rate), PurchaseTotalKRW: num(out.PurchaseKRW), ValueTotalKRW: num(out.ValueKRW), ProfitLossKRW: signed(out.ProfitKRW), ExchangeRate: rate, AsOf: time.Now(), Freshness: domain.FreshLive}, nil
 }
 
 func (c *Client) usPositions(ctx context.Context, accountID string) ([]domain.Position, error) {
@@ -351,7 +351,7 @@ func (c *Client) usPositions(ctx context.Context, accountID string) ([]domain.Po
 		}
 		code := strings.TrimSpace(p.Code)
 		symbol := domain.Symbol{Code: code, Ticker: code, Name: strings.TrimSpace(p.Name), Market: domain.MarketUS, Currency: currency, Exchange: normalizeUSExchange(p.Exchange)}
-		positions = append(positions, domain.Position{AccountID: accountID, Broker: c.ID(), Symbol: symbol, Quantity: num(p.Quantity), Tradable: num(p.Tradable), AveragePrice: num(p.Average), CurrentPrice: num(p.Price), PurchaseValue: num(p.Purchase), MarketValue: num(p.Value), ProfitLoss: signed(p.Profit), ProfitRate: signed(p.Rate), ExchangeRate: num(p.ExchangeRate), AsOf: time.Now()})
+		positions = append(positions, domain.Position{AccountID: accountID, Broker: c.ID(), Symbol: symbol, Quantity: num(p.Quantity), Tradable: num(p.Tradable), AveragePrice: num(p.Average), CurrentPrice: num(p.Price), PurchaseValue: num(p.Purchase), MarketValue: num(p.Value), ProfitLoss: signed(p.Profit), ProfitRate: signed(p.Rate), ExchangeRate: num(p.ExchangeRate), AsOf: time.Now(), Freshness: domain.FreshLive})
 	}
 	return positions, nil
 }

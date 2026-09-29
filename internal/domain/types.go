@@ -42,6 +42,7 @@ const (
 	FreshLive    Freshness = "LIVE"
 	FreshDelayed Freshness = "DELAYED"
 	FreshCached  Freshness = "CACHED"
+	FreshMixed   Freshness = "MIXED"
 )
 
 type Symbol struct {
@@ -82,6 +83,7 @@ type Balance struct {
 	ProfitLossKRW    decimal.Decimal
 	ExchangeRate     decimal.Decimal
 	AsOf             time.Time
+	Freshness        Freshness
 }
 
 // PortfolioSnapshot is one broker/account/currency ledger captured for a
@@ -127,6 +129,7 @@ type Position struct {
 	// broker did not include an applicable rate in its balance response.
 	ExchangeRate decimal.Decimal
 	AsOf         time.Time
+	Freshness    Freshness
 }
 
 type Quote struct {

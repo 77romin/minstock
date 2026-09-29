@@ -895,9 +895,31 @@ func (m Model) dashboardView() string {
 	if !m.snapshot.FX.Rate.IsZero() {
 		fx = m.snapshot.FX.Rate.StringFixed(2) + "원"
 	}
+	dataFreshness := snapshotFreshness(m.snapshot, summaries)
+	dataBadge := " [" + freshnessName(dataFreshness) + "]"
+	fxBadge := ""
+	if m.snapshot.FX.Rate.IsPositive() {
+		fxFreshness := m.snapshot.FX.Freshness
+		if m.snapshot.Cached {
+			fxFreshness = domain.FreshCached
+		}
+		fxBadge = fmt.Sprintf(" [%s·%s]", brokerDisplayName(m.snapshot.FX.Provider), freshnessName(fxFreshness))
+	}
+	statusLegend := ""
+	if m.width < 100 {
+		dataBadge = " " + freshnessMark(dataFreshness)
+		if m.snapshot.FX.Rate.IsPositive() {
+			fxFreshness := m.snapshot.FX.Freshness
+			if m.snapshot.Cached {
+				fxFreshness = domain.FreshCached
+			}
+			fxBadge = fmt.Sprintf(" [%s·%s]", brokerDisplayName(m.snapshot.FX.Provider), freshnessMark(fxFreshness))
+		}
+		statusLegend = "\n  상태  ●실시간  ◐혼합  ○캐시"
+	}
 	totalProfitText := directionalValueStyle(totalProfit).Render(signedMoney(totalProfit) + "원")
 	usdProfitText := directionalValueStyle(usdProfit).Render(signedUSD(usdProfit))
-	left := panel.Width(max(28, m.width/2-4)).Render(fmt.Sprintf("통합 자산\n\n  원화환산  %s원\n  평가손익  %s\n  미국자산  $%s\n  미국손익  %s\n  USD/KRW   %s", money(totalValue), totalProfitText, usdValue.StringFixed(2), usdProfitText, fx))
+	left := panel.Width(max(28, m.width/2-4)).Render(fmt.Sprintf("통합 자산\n\n  원화환산  %s원%s\n  평가손익  %s%s\n  미국자산  $%s%s\n  미국손익  %s%s\n  USD/KRW   %s%s%s", money(totalValue), dataBadge, totalProfitText, dataBadge, usdValue.StringFixed(2), dataBadge, usdProfitText, dataBadge, fx, fxBadge, statusLegend))
 	var status []string
 	for _, s := range m.snapshot.Statuses {
 		mark := "○"
@@ -920,6 +942,60 @@ type brokerAssetSummary struct {
 	USAssets       decimal.Decimal
 	USProfitLoss   decimal.Decimal
 	ExchangeRate   decimal.Decimal
+	Freshness      domain.Freshness
+	AsOf           time.Time
+}
+
+func normalizeFreshness(freshness domain.Freshness) domain.Freshness {
+	if freshness == "" {
+		return domain.FreshLive
+	}
+	return freshness
+}
+
+func mergeFreshness(current, next domain.Freshness) domain.Freshness {
+	next = normalizeFreshness(next)
+	if current == "" || current == next {
+		return next
+	}
+	return domain.FreshMixed
+}
+
+func freshnessName(freshness domain.Freshness) string {
+	switch freshness {
+	case domain.FreshCached:
+		return "캐시"
+	case domain.FreshDelayed:
+		return "지연"
+	case domain.FreshMixed:
+		return "일부 캐시"
+	default:
+		return "실시간"
+	}
+}
+
+func freshnessMark(freshness domain.Freshness) string {
+	switch freshness {
+	case domain.FreshCached:
+		return "○"
+	case domain.FreshDelayed, domain.FreshMixed:
+		return "◐"
+	default:
+		return "●"
+	}
+}
+
+func snapshotFreshness(snapshot app.Snapshot, summaries []brokerAssetSummary) domain.Freshness {
+	if snapshot.Cached {
+		return domain.FreshCached
+	}
+	result := domain.Freshness("")
+	for _, summary := range summaries {
+		if summary.HasData {
+			result = mergeFreshness(result, summary.Freshness)
+		}
+	}
+	return normalizeFreshness(result)
 }
 
 func brokerAssetSummaries(snapshot app.Snapshot) []brokerAssetSummary {
@@ -938,6 +1014,10 @@ func brokerAssetSummaries(snapshot app.Snapshot) []brokerAssetSummary {
 	for _, balance := range snapshot.Balances {
 		summary := ensure(balance.Broker)
 		summary.HasData = true
+		summary.Freshness = mergeFreshness(summary.Freshness, balance.Freshness)
+		if summary.AsOf.IsZero() || (!balance.AsOf.IsZero() && balance.AsOf.Before(summary.AsOf)) {
+			summary.AsOf = balance.AsOf
+		}
 		if balance.Currency != domain.USD {
 			summary.TotalAssetsKRW = summary.TotalAssetsKRW.Add(balance.ValueTotal).Add(balance.Cash)
 			summary.PurchaseKRW = summary.PurchaseKRW.Add(balance.PurchaseTotal)
@@ -975,6 +1055,9 @@ func brokerAssetSummaries(snapshot app.Snapshot) []brokerAssetSummary {
 	}
 	result := make([]brokerAssetSummary, 0, len(byBroker))
 	for _, summary := range byBroker {
+		if snapshot.Cached && summary.HasData {
+			summary.Freshness = domain.FreshCached
+		}
 		result = append(result, *summary)
 	}
 	order := func(broker domain.BrokerID) int {
@@ -1003,15 +1086,22 @@ func (m Model) brokerAssetBreakdownView(summaries []brokerAssetSummary, totalAss
 	wide := m.width >= 110
 	lines := []string{"증권사별 자산 현황", ""}
 	if wide {
-		lines = append(lines, "  증권사           총자산          평가손익      수익률       미국자산      적용환율     자산비중")
+		lines = append(lines, "  증권사           총자산          평가손익      수익률       미국자산      적용환율     자산비중          상태")
 	} else {
-		lines = append(lines, "  증권사           총자산          평가손익      수익률   자산비중")
+		lines = append(lines, "  "+strings.Join([]string{fitCell("증권사·상태", 15, false), fitCell("총자산", 16, true), fitCell("평가손익", 16, true), fitCell("수익률", 9, true), fitCell("자산비중", 9, true)}, " "))
 	}
 	for _, summary := range summaries {
-		brokerCell := fitCell(brokerDisplayName(summary.Broker), 8, false)
+		brokerLabel, brokerWidth := brokerDisplayName(summary.Broker), 8
+		if !wide {
+			brokerWidth = 15
+			if summary.HasData {
+				brokerLabel += "·" + freshnessName(summary.Freshness)
+			}
+		}
+		brokerCell := fitCell(brokerLabel, brokerWidth, false)
 		if !summary.HasData {
 			if wide {
-				lines = append(lines, "  "+strings.Join([]string{brokerCell, fitCell("데이터 없음", 16, true), fitCell("-", 16, true), fitCell("-", 9, true), fitCell("-", 13, true), fitCell("-", 12, true), fitCell("-", 9, true)}, " "))
+				lines = append(lines, "  "+strings.Join([]string{brokerCell, fitCell("데이터 없음", 16, true), fitCell("-", 16, true), fitCell("-", 9, true), fitCell("-", 13, true), fitCell("-", 12, true), fitCell("-", 9, true), fitCell("연결 안 됨", 20, true)}, " "))
 			} else {
 				lines = append(lines, "  "+strings.Join([]string{brokerCell, fitCell("데이터 없음", 16, true), fitCell("-", 16, true), fitCell("-", 9, true), fitCell("-", 9, true)}, " "))
 			}
@@ -1036,7 +1126,11 @@ func (m Model) brokerAssetBreakdownView(summaries []brokerAssetSummary, totalAss
 			if summary.ExchangeRate.IsPositive() {
 				fx = summary.ExchangeRate.StringFixed(2) + "원"
 			}
-			lines = append(lines, "  "+strings.Join([]string{brokerCell, assetCell, profitCell, rateCell, fitCell(usAsset, 13, true), fitCell(fx, 12, true), weightCell}, " "))
+			status := freshnessName(summary.Freshness)
+			if !summary.AsOf.IsZero() {
+				status += " " + summary.AsOf.In(time.Local).Format("15:04:05")
+			}
+			lines = append(lines, "  "+strings.Join([]string{brokerCell, assetCell, profitCell, rateCell, fitCell(usAsset, 13, true), fitCell(fx, 12, true), weightCell, fitCell(status, 20, true)}, " "))
 		} else {
 			lines = append(lines, "  "+strings.Join([]string{brokerCell, assetCell, profitCell, rateCell, weightCell}, " "))
 		}

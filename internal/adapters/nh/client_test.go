@@ -106,6 +106,9 @@ func TestBalanceAndPositionsUseCurrentContractAndShareResponse(t *testing.T) {
 	if foreignBalance.Currency != domain.USD || !foreignBalance.ValueTotal.Equal(decimal.NewFromInt(600)) || !foreignBalance.ValueTotalKRW.Equal(decimal.NewFromInt(829470)) || !foreignBalance.ExchangeRate.Equal(decimal.RequireFromString("1382.45")) {
 		t.Fatalf("unexpected NH foreign balance: %#v", foreignBalance)
 	}
+	if foreignBalance.Freshness != domain.FreshLive || foreignBalance.AsOf.IsZero() {
+		t.Fatalf("initial NH foreign balance must be live with source time: %#v", foreignBalance)
+	}
 	positions, err := client.Positions(t.Context(), "1234567890")
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +137,9 @@ func TestBalanceAndPositionsUseCurrentContractAndShareResponse(t *testing.T) {
 	staleBalances, err := client.Balances(t.Context(), "1234567890")
 	if err != nil || len(staleBalances) != 2 || !staleBalances[1].ValueTotal.Equal(decimal.NewFromInt(600)) {
 		t.Fatalf("last successful foreign balance was not preserved: %#v %v", staleBalances, err)
+	}
+	if staleBalances[1].Freshness != domain.FreshCached || staleBalances[1].AsOf.IsZero() {
+		t.Fatalf("fallback NH foreign balance must be marked cached: %#v", staleBalances[1])
 	}
 	if foreignBalanceCalls.Load() != 2 {
 		t.Fatalf("foreign refresh calls=%d; want 2", foreignBalanceCalls.Load())

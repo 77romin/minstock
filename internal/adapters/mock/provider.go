@@ -41,7 +41,7 @@ func (p *Provider) Balance(_ context.Context, id string) (domain.Balance, error)
 		purchase := decimal.NewFromFloat(4200.50)
 		value := decimal.NewFromFloat(4588.20)
 		profit := value.Sub(purchase)
-		return domain.Balance{AccountID: id, Broker: p.ID(), Currency: domain.USD, Cash: decimal.NewFromFloat(812.45), PurchaseTotal: purchase, ValueTotal: value, ProfitLoss: profit, ProfitRate: profit.Div(purchase).Mul(decimal.NewFromInt(100)), AsOf: time.Now()}, nil
+		return domain.Balance{AccountID: id, Broker: p.ID(), Currency: domain.USD, Cash: decimal.NewFromFloat(812.45), PurchaseTotal: purchase, ValueTotal: value, ProfitLoss: profit, ProfitRate: profit.Div(purchase).Mul(decimal.NewFromInt(100)), AsOf: time.Now(), Freshness: domain.FreshLive}, nil
 	}
 	if id != "mock-nh" && id != "mock-kiwoom" {
 		return domain.Balance{}, fmt.Errorf("unknown mock account %s", id)
@@ -49,11 +49,11 @@ func (p *Provider) Balance(_ context.Context, id string) (domain.Balance, error)
 	purchase := decimal.NewFromInt(30_000_000)
 	value := decimal.NewFromInt(31_240_000)
 	profit := value.Sub(purchase)
-	return domain.Balance{AccountID: id, Broker: p.ID(), Currency: domain.KRW, Cash: decimal.NewFromInt(4_820_000), PurchaseTotal: purchase, ValueTotal: value, ProfitLoss: profit, ProfitRate: profit.Div(purchase).Mul(decimal.NewFromInt(100)), AsOf: time.Now()}, nil
+	return domain.Balance{AccountID: id, Broker: p.ID(), Currency: domain.KRW, Cash: decimal.NewFromInt(4_820_000), PurchaseTotal: purchase, ValueTotal: value, ProfitLoss: profit, ProfitRate: profit.Div(purchase).Mul(decimal.NewFromInt(100)), AsOf: time.Now(), Freshness: domain.FreshLive}, nil
 }
 func (p *Provider) Positions(_ context.Context, id string) ([]domain.Position, error) {
-	all := []domain.Position{{AccountID: "mock-nh", Broker: p.ID(), Symbol: symbols[0], Quantity: decimal.NewFromInt(150), Tradable: decimal.NewFromInt(150), AveragePrice: decimal.NewFromInt(76710), CurrentPrice: decimal.NewFromInt(82400), PurchaseValue: decimal.NewFromInt(11506500), MarketValue: decimal.NewFromInt(12360000), ProfitLoss: decimal.NewFromInt(853500), ProfitRate: decimal.NewFromFloat(7.42), AsOf: time.Now()}, {AccountID: "mock-kiwoom", Broker: p.ID(), Symbol: symbols[1], Quantity: decimal.NewFromInt(42), Tradable: decimal.NewFromInt(42), AveragePrice: decimal.NewFromInt(214760), CurrentPrice: decimal.NewFromInt(212250), PurchaseValue: decimal.NewFromInt(9019920), MarketValue: decimal.NewFromInt(8914500), ProfitLoss: decimal.NewFromInt(-105420), ProfitRate: decimal.NewFromFloat(-1.18), AsOf: time.Now()}}
-	all = append(all, domain.Position{AccountID: "mock-us", Broker: p.ID(), Symbol: symbols[7], Quantity: decimal.NewFromInt(20), Tradable: decimal.NewFromInt(20), AveragePrice: decimal.NewFromFloat(210.025), CurrentPrice: decimal.NewFromFloat(229.41), PurchaseValue: decimal.NewFromFloat(4200.50), MarketValue: decimal.NewFromFloat(4588.20), ProfitLoss: decimal.NewFromFloat(387.70), ProfitRate: decimal.NewFromFloat(9.23), AsOf: time.Now()})
+	all := []domain.Position{{AccountID: "mock-nh", Broker: p.ID(), Symbol: symbols[0], Quantity: decimal.NewFromInt(150), Tradable: decimal.NewFromInt(150), AveragePrice: decimal.NewFromInt(76710), CurrentPrice: decimal.NewFromInt(82400), PurchaseValue: decimal.NewFromInt(11506500), MarketValue: decimal.NewFromInt(12360000), ProfitLoss: decimal.NewFromInt(853500), ProfitRate: decimal.NewFromFloat(7.42), AsOf: time.Now(), Freshness: domain.FreshLive}, {AccountID: "mock-kiwoom", Broker: p.ID(), Symbol: symbols[1], Quantity: decimal.NewFromInt(42), Tradable: decimal.NewFromInt(42), AveragePrice: decimal.NewFromInt(214760), CurrentPrice: decimal.NewFromInt(212250), PurchaseValue: decimal.NewFromInt(9019920), MarketValue: decimal.NewFromInt(8914500), ProfitLoss: decimal.NewFromInt(-105420), ProfitRate: decimal.NewFromFloat(-1.18), AsOf: time.Now(), Freshness: domain.FreshLive}}
+	all = append(all, domain.Position{AccountID: "mock-us", Broker: p.ID(), Symbol: symbols[7], Quantity: decimal.NewFromInt(20), Tradable: decimal.NewFromInt(20), AveragePrice: decimal.NewFromFloat(210.025), CurrentPrice: decimal.NewFromFloat(229.41), PurchaseValue: decimal.NewFromFloat(4200.50), MarketValue: decimal.NewFromFloat(4588.20), ProfitLoss: decimal.NewFromFloat(387.70), ProfitRate: decimal.NewFromFloat(9.23), AsOf: time.Now(), Freshness: domain.FreshLive})
 	var out []domain.Position
 	for _, position := range all {
 		if position.AccountID == id {

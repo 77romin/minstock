@@ -314,6 +314,31 @@ func TestBrokerAssetSummariesDoNotUseAnotherBrokersFX(t *testing.T) {
 	}
 }
 
+func TestDashboardShowsDataFreshnessAndFXProvider(t *testing.T) {
+	asOf := time.Date(2026, 9, 29, 12, 34, 56, 0, time.Local)
+	snapshot := app.Snapshot{
+		Balances: []domain.Balance{
+			{Broker: domain.BrokerNH, Currency: domain.KRW, ValueTotal: decimal.NewFromInt(1_000_000), AsOf: asOf, Freshness: domain.FreshLive},
+			{Broker: domain.BrokerNH, Currency: domain.USD, ValueTotal: decimal.NewFromInt(100), ValueTotalKRW: decimal.NewFromInt(140_000), ExchangeRate: decimal.NewFromInt(1400), AsOf: asOf.Add(-time.Minute), Freshness: domain.FreshCached},
+		},
+		FX: domain.FXRate{Provider: domain.BrokerNH, Rate: decimal.NewFromInt(1400), AsOf: asOf, Freshness: domain.FreshLive},
+	}
+	view := (Model{width: 140, snapshot: snapshot}).dashboardView()
+	for _, want := range []string{"[일부 캐시]", "[NH·실시간]", "일부 캐시 12:33:56"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("provenance value %q missing: %q", want, view)
+		}
+	}
+
+	snapshot.Cached = true
+	cachedView := (Model{width: 100, snapshot: snapshot}).dashboardView()
+	for _, want := range []string{"[캐시]", "[NH·캐시]", "NH·캐시"} {
+		if !strings.Contains(cachedView, want) {
+			t.Fatalf("cached provenance value %q missing: %q", want, cachedView)
+		}
+	}
+}
+
 func TestPerformanceViewAggregatesCurrenciesByDate(t *testing.T) {
 	loc := time.FixedZone("KST", 9*60*60)
 	day1 := time.Date(2026, 9, 28, 0, 0, 0, 0, loc)

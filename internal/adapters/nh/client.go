@@ -219,12 +219,12 @@ type balanceEnvelope struct {
 	Positions []map[string]any `json:"Output_1"`
 }
 
-func (c *Client) fetchBalance(ctx context.Context, accountID string) (balanceEnvelope, error) {
+func (c *Client) fetchBalance(ctx context.Context, accountID string) (balanceEnvelope, domain.Freshness, time.Time, error) {
 	c.balanceMu.Lock()
 	defer c.balanceMu.Unlock()
 	cached, hasCached := c.balances[accountID]
 	if hasCached && time.Since(cached.fetchedAt) < 5*time.Second {
-		return cached.value, nil
+		return cached.value, domain.FreshCached, cached.fetchedAt, nil
 	}
 	var out balanceEnvelope
 	err := c.call(ctx, "/krstock/inquiry/v1/balance", map[string]any{
@@ -232,16 +232,18 @@ func (c *Client) fetchBalance(ctx context.Context, accountID string) (balanceEnv
 		"qut_dit_cd": "UNT", "aly_qut_cd": "1",
 	}, &out)
 	if err == nil {
-		c.balances[accountID] = cachedBalance{value: out, fetchedAt: time.Now()}
+		fetchedAt := time.Now()
+		c.balances[accountID] = cachedBalance{value: out, fetchedAt: fetchedAt}
+		return out, domain.FreshLive, fetchedAt, nil
 	} else if hasCached {
 		// A transient refresh failure must not erase a previously displayed
 		// account. Keep the last successful read until NH recovers.
-		return cached.value, nil
+		return cached.value, domain.FreshCached, cached.fetchedAt, nil
 	}
-	return out, err
+	return out, "", time.Time{}, err
 }
 func (c *Client) Balance(ctx context.Context, accountID string) (domain.Balance, error) {
-	out, err := c.fetchBalance(ctx, accountID)
+	out, freshness, asOf, err := c.fetchBalance(ctx, accountID)
 	if err != nil {
 		return domain.Balance{}, err
 	}
@@ -254,7 +256,7 @@ func (c *Client) Balance(ctx context.Context, accountID string) (domain.Balance,
 	if purchase.IsPositive() {
 		rate = profit.Div(purchase).Mul(decimal.NewFromInt(100))
 	}
-	return domain.Balance{AccountID: accountID, Broker: c.ID(), Currency: domain.KRW, Cash: cash, PurchaseTotal: purchase, ValueTotal: value, ProfitLoss: profit, ProfitRate: rate, AsOf: time.Now()}, nil
+	return domain.Balance{AccountID: accountID, Broker: c.ID(), Currency: domain.KRW, Cash: cash, PurchaseTotal: purchase, ValueTotal: value, ProfitLoss: profit, ProfitRate: rate, AsOf: asOf, Freshness: freshness}, nil
 }
 
 func (c *Client) Balances(ctx context.Context, accountID string) ([]domain.Balance, error) {
@@ -275,7 +277,7 @@ func (c *Client) Balances(ctx context.Context, accountID string) ([]domain.Balan
 	return result, nil
 }
 func (c *Client) Positions(ctx context.Context, accountID string) ([]domain.Position, error) {
-	out, err := c.fetchBalance(ctx, accountID)
+	out, freshness, asOf, err := c.fetchBalance(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +285,7 @@ func (c *Client) Positions(ctx context.Context, accountID string) ([]domain.Posi
 	for _, p := range out.Positions {
 		code := first(p, "iem_cd", "pdno", "stck_shrn_iscd")
 		symbol := domain.Symbol{Code: code, Ticker: code, Name: first(p, "iem_nm", "prdt_name"), Market: domain.MarketKRX, Currency: domain.KRW}
-		positions = append(positions, domain.Position{AccountID: accountID, Broker: c.ID(), Symbol: symbol, Quantity: decAny(p, "hldg_qty", "hold_qty"), Tradable: decAny(p, "ord_psbl_qty", "sell_psbl_qty"), AveragePrice: decAny(p, "pchs_avg_pric", "pchs_avg_prc"), CurrentPrice: decAny(p, "stck_prpr", "prpr"), PurchaseValue: decAny(p, "pchs_amt", "buy_amt"), MarketValue: decAny(p, "evlu_amt", "evlu_pfls_amt"), ProfitLoss: decAnySigned(p, "evlu_pfls_amt", "evlu_pfls"), ProfitRate: decAnySigned(p, "evlu_pfls_rt", "evlu_erng_rt"), AsOf: time.Now()})
+		positions = append(positions, domain.Position{AccountID: accountID, Broker: c.ID(), Symbol: symbol, Quantity: decAny(p, "hldg_qty", "hold_qty"), Tradable: decAny(p, "ord_psbl_qty", "sell_psbl_qty"), AveragePrice: decAny(p, "pchs_avg_pric", "pchs_avg_prc"), CurrentPrice: decAny(p, "stck_prpr", "prpr"), PurchaseValue: decAny(p, "pchs_amt", "buy_amt"), MarketValue: decAny(p, "evlu_amt", "evlu_pfls_amt"), ProfitLoss: decAnySigned(p, "evlu_pfls_amt", "evlu_pfls"), ProfitRate: decAnySigned(p, "evlu_pfls_rt", "evlu_erng_rt"), AsOf: asOf, Freshness: freshness})
 	}
 	foreign, foreignErr := c.foreignPositions(ctx, accountID)
 	if foreignErr != nil {
@@ -296,12 +298,12 @@ func (c *Client) Positions(ctx context.Context, accountID string) ([]domain.Posi
 	return positions, nil
 }
 
-func (c *Client) fetchForeignBalance(ctx context.Context, accountID string) (balanceEnvelope, error) {
+func (c *Client) fetchForeignBalance(ctx context.Context, accountID string) (balanceEnvelope, domain.Freshness, time.Time, error) {
 	c.balanceMu.Lock()
 	defer c.balanceMu.Unlock()
 	cached, hasCached := c.foreignBalances[accountID]
 	if hasCached && time.Since(cached.fetchedAt) < 5*time.Second {
-		return cached.value, nil
+		return cached.value, domain.FreshCached, cached.fetchedAt, nil
 	}
 	var out balanceEnvelope
 	err := c.call(ctx, "/gbstock/inquiry/v1/balance", map[string]any{
@@ -309,14 +311,16 @@ func (c *Client) fetchForeignBalance(ctx context.Context, accountID string) (bal
 		"cur_cd": "USD", "xns_dit_cd": "1",
 	}, &out)
 	if err == nil {
-		c.foreignBalances[accountID] = cachedBalance{value: out, fetchedAt: time.Now()}
+		fetchedAt := time.Now()
+		c.foreignBalances[accountID] = cachedBalance{value: out, fetchedAt: fetchedAt}
+		return out, domain.FreshLive, fetchedAt, nil
 	} else if hasCached {
 		// NH can intermittently reject or time out a refresh, especially when
 		// another minstock process is polling the same account. Preserve the
 		// last good overseas ledger instead of replacing the dashboard with $0.
-		return cached.value, nil
+		return cached.value, domain.FreshCached, cached.fetchedAt, nil
 	}
-	return out, err
+	return out, "", time.Time{}, err
 }
 
 func foreignExchangeRate(out balanceEnvelope) decimal.Decimal {
@@ -341,7 +345,7 @@ func foreignExchangeRate(out balanceEnvelope) decimal.Decimal {
 }
 
 func (c *Client) foreignBalance(ctx context.Context, accountID string) (domain.Balance, error) {
-	out, err := c.fetchForeignBalance(ctx, accountID)
+	out, freshness, asOf, err := c.fetchForeignBalance(ctx, accountID)
 	if err != nil {
 		return domain.Balance{}, err
 	}
@@ -352,12 +356,12 @@ func (c *Client) foreignBalance(ctx context.Context, accountID string) (domain.B
 		ValueTotal: decAny(s, "fc_eal_amt"), ProfitLoss: decAnySigned(s, "fc_eal_pls_amt"),
 		ProfitRate: decAnySigned(s, "pft_rt"), PurchaseTotalKRW: decAny(s, "abk_amt"),
 		ValueTotalKRW: decAny(s, "eal_amt_sum"), ProfitLossKRW: decAnySigned(s, "eal_pls_sum_amt"),
-		ExchangeRate: foreignExchangeRate(out), AsOf: time.Now(),
+		ExchangeRate: foreignExchangeRate(out), AsOf: asOf, Freshness: freshness,
 	}, nil
 }
 
 func (c *Client) foreignPositions(ctx context.Context, accountID string) ([]domain.Position, error) {
-	out, err := c.fetchForeignBalance(ctx, accountID)
+	out, freshness, asOf, err := c.fetchForeignBalance(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +398,7 @@ func (c *Client) foreignPositions(ctx context.Context, accountID string) ([]doma
 			PurchaseValue: purchaseValue, MarketValue: marketValue,
 			ProfitLoss: profitLoss, ProfitRate: decAnySigned(p, "eal_pft_rt", "eal_pft_rt1"),
 			PurchaseValueKRW: purchaseValueKRW, MarketValueKRW: marketValueKRW, ProfitLossKRW: profitLossKRW,
-			ExchangeRate: exchangeRate, AsOf: time.Now(),
+			ExchangeRate: exchangeRate, AsOf: asOf, Freshness: freshness,
 		})
 	}
 	return positions, nil
