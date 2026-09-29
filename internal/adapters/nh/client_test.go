@@ -68,7 +68,10 @@ func TestBalanceAndPositionsUseCurrentContractAndShareResponse(t *testing.T) {
 			foreignBalanceCalls.Add(1)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"rsp_cd": "00000", "rsp_msg": "완료",
-				"Output_0": map[string]string{"fc_aet_amt": "1000"},
+				"Output_0": map[string]string{
+					"fc_abk_amt": "500", "fc_eal_amt": "600", "fc_eal_pls_amt": "100", "fc_dca": "400",
+					"abk_amt": "690000", "eal_amt_sum": "829470", "eal_pls_sum_amt": "139470", "pft_rt": "20",
+				},
 				"Output_1": []map[string]string{{
 					"iem_cd": "AAPL", "iem_nm": "애플", "cns_bse_bnc_qty": "3",
 					"fc_avg_phs_pr": "150", "fc_sec_end_pr": "200", "fc_eal_amt": "600",
@@ -88,6 +91,14 @@ func TestBalanceAndPositionsUseCurrentContractAndShareResponse(t *testing.T) {
 	}
 	if _, err := client.Balance(t.Context(), "1234567890"); err != nil {
 		t.Fatal(err)
+	}
+	balances, err := client.Balances(t.Context(), "1234567890")
+	if err != nil || len(balances) != 2 {
+		t.Fatalf("combined balances: %#v %v", balances, err)
+	}
+	foreignBalance := balances[1]
+	if foreignBalance.Currency != domain.USD || !foreignBalance.ValueTotal.Equal(decimal.NewFromInt(600)) || !foreignBalance.ValueTotalKRW.Equal(decimal.NewFromInt(829470)) || !foreignBalance.ExchangeRate.Equal(decimal.RequireFromString("1382.45")) {
+		t.Fatalf("unexpected NH foreign balance: %#v", foreignBalance)
 	}
 	positions, err := client.Positions(t.Context(), "1234567890")
 	if err != nil {

@@ -150,10 +150,19 @@ func (s *Service) DashboardCore(ctx context.Context) Snapshot {
 				return
 			}
 			for _, account := range accounts {
-				balance, err := provider.Balance(ctx, account.ID)
+				var balances []domain.Balance
+				if source, ok := provider.(ports.BalanceListReader); ok {
+					balances, err = source.Balances(ctx, account.ID)
+				} else {
+					var balance domain.Balance
+					balance, err = provider.Balance(ctx, account.ID)
+					if err == nil {
+						balances = []domain.Balance{balance}
+					}
+				}
 				if err == nil {
 					mu.Lock()
-					snap.Balances = append(snap.Balances, balance)
+					snap.Balances = append(snap.Balances, balances...)
 					mu.Unlock()
 				} else {
 					mu.Lock()
@@ -189,6 +198,22 @@ func (s *Service) DashboardCore(ctx context.Context) Snapshot {
 		}()
 	}
 	wg.Wait()
+	if !snap.FX.Rate.IsPositive() {
+		for _, balance := range snap.Balances {
+			if balance.Currency == domain.USD && balance.ExchangeRate.IsPositive() {
+				snap.FX = domain.FXRate{Base: domain.USD, Quote: domain.KRW, Rate: balance.ExchangeRate, AsOf: balance.AsOf, Provider: balance.Broker, Freshness: domain.FreshLive}
+				break
+			}
+		}
+	}
+	if !snap.FX.Rate.IsPositive() {
+		for _, position := range snap.Positions {
+			if position.Symbol.Currency == domain.USD && position.ExchangeRate.IsPositive() {
+				snap.FX = domain.FXRate{Base: domain.USD, Quote: domain.KRW, Rate: position.ExchangeRate, AsOf: position.AsOf, Provider: position.Broker, Freshness: domain.FreshLive}
+				break
+			}
+		}
+	}
 	items, err := s.repo.ListWatchlist(ctx)
 	if err == nil {
 		snap.Watchlist = items

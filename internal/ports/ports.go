@@ -13,6 +13,13 @@ type PortfolioReader interface {
 	Positions(context.Context, string) ([]domain.Position, error)
 }
 
+// BalanceListReader is implemented by brokers that expose multiple currency
+// ledgers for one account number. Service falls back to PortfolioReader.Balance
+// for providers that do not implement it.
+type BalanceListReader interface {
+	Balances(context.Context, string) ([]domain.Balance, error)
+}
+
 type MarketDataProvider interface {
 	Quote(context.Context, domain.Symbol) (domain.Quote, error)
 	Candles(context.Context, domain.CandleQuery) ([]domain.Candle, error)

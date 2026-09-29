@@ -68,15 +68,20 @@ type Account struct {
 }
 
 type Balance struct {
-	AccountID     string
-	Broker        BrokerID
-	Currency      Currency
-	Cash          decimal.Decimal
-	PurchaseTotal decimal.Decimal
-	ValueTotal    decimal.Decimal
-	ProfitLoss    decimal.Decimal
-	ProfitRate    decimal.Decimal
-	AsOf          time.Time
+	AccountID        string
+	Broker           BrokerID
+	Currency         Currency
+	Cash             decimal.Decimal
+	PurchaseTotal    decimal.Decimal
+	ValueTotal       decimal.Decimal
+	ProfitLoss       decimal.Decimal
+	ProfitRate       decimal.Decimal
+	CashKRW          decimal.Decimal
+	PurchaseTotalKRW decimal.Decimal
+	ValueTotalKRW    decimal.Decimal
+	ProfitLossKRW    decimal.Decimal
+	ExchangeRate     decimal.Decimal
+	AsOf             time.Time
 }
 
 type Position struct {

@@ -331,7 +331,11 @@ func (c *Client) usBalance(ctx context.Context, accountID string) (domain.Balanc
 			}
 		}
 	}
-	return domain.Balance{AccountID: accountID, Broker: c.ID(), Currency: domain.USD, Cash: cash, PurchaseTotal: num(out.Purchase), ValueTotal: num(out.Value), ProfitLoss: signed(out.Profit), ProfitRate: signed(out.Rate), AsOf: time.Now()}, nil
+	rate := decimal.Zero
+	if num(out.Value).IsPositive() && num(out.ValueKRW).IsPositive() {
+		rate = num(out.ValueKRW).Div(num(out.Value))
+	}
+	return domain.Balance{AccountID: accountID, Broker: c.ID(), Currency: domain.USD, Cash: cash, PurchaseTotal: num(out.Purchase), ValueTotal: num(out.Value), ProfitLoss: signed(out.Profit), ProfitRate: signed(out.Rate), PurchaseTotalKRW: num(out.PurchaseKRW), ValueTotalKRW: num(out.ValueKRW), ProfitLossKRW: signed(out.ProfitKRW), ExchangeRate: rate, AsOf: time.Now()}, nil
 }
 
 func (c *Client) usPositions(ctx context.Context, accountID string) ([]domain.Position, error) {

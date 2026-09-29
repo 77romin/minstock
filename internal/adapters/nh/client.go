@@ -21,17 +21,18 @@ import (
 )
 
 type Client struct {
-	baseURL    string
-	authURL    string
-	creds      security.Credentials
-	http       *http.Client
-	limiter    *rate.Limiter
-	mu         sync.Mutex
-	token      string
-	expires    time.Time
-	balanceMu  sync.Mutex
-	balances   map[string]cachedBalance
-	cacheToken bool
+	baseURL         string
+	authURL         string
+	creds           security.Credentials
+	http            *http.Client
+	limiter         *rate.Limiter
+	mu              sync.Mutex
+	token           string
+	expires         time.Time
+	balanceMu       sync.Mutex
+	balances        map[string]cachedBalance
+	foreignBalances map[string]cachedBalance
+	cacheToken      bool
 }
 
 type cachedBalance struct {
@@ -52,7 +53,7 @@ func New(baseURL, authURL string, creds security.Credentials) (*Client, error) {
 	return &Client{
 		baseURL: baseURL, authURL: authURL, creds: creds,
 		http: &http.Client{Timeout: 15 * time.Second}, limiter: rate.NewLimiter(4, 1),
-		balances: make(map[string]cachedBalance), cacheToken: cacheToken,
+		balances: make(map[string]cachedBalance), foreignBalances: make(map[string]cachedBalance), cacheToken: cacheToken,
 	}, nil
 }
 
@@ -250,6 +251,24 @@ func (c *Client) Balance(ctx context.Context, accountID string) (domain.Balance,
 	}
 	return domain.Balance{AccountID: accountID, Broker: c.ID(), Currency: domain.KRW, Cash: cash, PurchaseTotal: purchase, ValueTotal: value, ProfitLoss: profit, ProfitRate: rate, AsOf: time.Now()}, nil
 }
+
+func (c *Client) Balances(ctx context.Context, accountID string) ([]domain.Balance, error) {
+	domestic, err := c.Balance(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	result := []domain.Balance{domestic}
+	foreign, err := c.foreignBalance(ctx, accountID)
+	if err != nil {
+		// Preserve the usable domestic balance. Positions performs its own
+		// foreign error reporting and may still return domestic holdings.
+		return result, nil
+	}
+	if !foreign.ValueTotal.IsZero() || !foreign.Cash.IsZero() || !foreign.PurchaseTotal.IsZero() {
+		result = append(result, foreign)
+	}
+	return result, nil
+}
 func (c *Client) Positions(ctx context.Context, accountID string) ([]domain.Position, error) {
 	out, err := c.fetchBalance(ctx, accountID)
 	if err != nil {
@@ -272,14 +291,63 @@ func (c *Client) Positions(ctx context.Context, accountID string) ([]domain.Posi
 	return positions, nil
 }
 
-func (c *Client) foreignPositions(ctx context.Context, accountID string) ([]domain.Position, error) {
-	var out struct {
-		Positions []map[string]any `json:"Output_1"`
+func (c *Client) fetchForeignBalance(ctx context.Context, accountID string) (balanceEnvelope, error) {
+	c.balanceMu.Lock()
+	defer c.balanceMu.Unlock()
+	if cached, ok := c.foreignBalances[accountID]; ok && time.Since(cached.fetchedAt) < 5*time.Second {
+		return cached.value, nil
 	}
-	if err := c.call(ctx, "/gbstock/inquiry/v1/balance", map[string]any{
+	var out balanceEnvelope
+	err := c.call(ctx, "/gbstock/inquiry/v1/balance", map[string]any{
 		"act_no": accountID, "qut_iqr_dit_cd": "9", "fc_sec_trd_nat_cd": "200",
 		"cur_cd": "USD", "xns_dit_cd": "1",
-	}, &out); err != nil {
+	}, &out)
+	if err == nil {
+		c.foreignBalances[accountID] = cachedBalance{value: out, fetchedAt: time.Now()}
+	}
+	return out, err
+}
+
+func foreignExchangeRate(out balanceEnvelope) decimal.Decimal {
+	s := out.Summary
+	foreignValue := decAny(s, "fc_eal_amt")
+	valueKRW := decAny(s, "eal_amt_sum")
+	if foreignValue.IsPositive() && valueKRW.IsPositive() {
+		return valueKRW.Div(foreignValue)
+	}
+	for _, p := range out.Positions {
+		rate := decAny(p, "tdt_sby_bse_xcg_rt")
+		if rate.IsPositive() {
+			return rate
+		}
+		foreignPositionValue := decAny(p, "fc_eal_amt")
+		positionValueKRW := decAny(p, "krw_eal_amt")
+		if foreignPositionValue.IsPositive() && positionValueKRW.IsPositive() {
+			return positionValueKRW.Div(foreignPositionValue)
+		}
+	}
+	return decimal.Zero
+}
+
+func (c *Client) foreignBalance(ctx context.Context, accountID string) (domain.Balance, error) {
+	out, err := c.fetchForeignBalance(ctx, accountID)
+	if err != nil {
+		return domain.Balance{}, err
+	}
+	s := out.Summary
+	return domain.Balance{
+		AccountID: accountID, Broker: c.ID(), Currency: domain.USD,
+		Cash: decAny(s, "fc_dca"), PurchaseTotal: decAny(s, "fc_abk_amt"),
+		ValueTotal: decAny(s, "fc_eal_amt"), ProfitLoss: decAnySigned(s, "fc_eal_pls_amt"),
+		ProfitRate: decAnySigned(s, "pft_rt"), PurchaseTotalKRW: decAny(s, "abk_amt"),
+		ValueTotalKRW: decAny(s, "eal_amt_sum"), ProfitLossKRW: decAnySigned(s, "eal_pls_sum_amt"),
+		ExchangeRate: foreignExchangeRate(out), AsOf: time.Now(),
+	}, nil
+}
+
+func (c *Client) foreignPositions(ctx context.Context, accountID string) ([]domain.Position, error) {
+	out, err := c.fetchForeignBalance(ctx, accountID)
+	if err != nil {
 		return nil, err
 	}
 	positions := make([]domain.Position, 0, len(out.Positions))

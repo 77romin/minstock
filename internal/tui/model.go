@@ -807,10 +807,24 @@ func (m Model) dashboardView() string {
 		value := b.ValueTotal.Add(b.Cash)
 		if b.Currency == domain.USD {
 			usdValue, usdProfit = usdValue.Add(value), usdProfit.Add(b.ProfitLoss)
-			if m.snapshot.FX.Rate.IsPositive() {
-				totalValue = totalValue.Add(value.Mul(m.snapshot.FX.Rate))
-				totalProfit = totalProfit.Add(b.ProfitLoss.Mul(m.snapshot.FX.Rate))
+			rate := b.ExchangeRate
+			if !rate.IsPositive() && m.snapshot.FX.Provider == b.Broker {
+				rate = m.snapshot.FX.Rate
 			}
+			marketValueKRW := b.ValueTotalKRW
+			if marketValueKRW.IsZero() && rate.IsPositive() {
+				marketValueKRW = b.ValueTotal.Mul(rate)
+			}
+			cashKRW := b.CashKRW
+			if cashKRW.IsZero() && rate.IsPositive() {
+				cashKRW = b.Cash.Mul(rate)
+			}
+			profitKRW := b.ProfitLossKRW
+			if profitKRW.IsZero() && rate.IsPositive() {
+				profitKRW = b.ProfitLoss.Mul(rate)
+			}
+			totalValue = totalValue.Add(marketValueKRW).Add(cashKRW)
+			totalProfit = totalProfit.Add(profitKRW)
 		} else {
 			totalValue, totalProfit = totalValue.Add(value), totalProfit.Add(b.ProfitLoss)
 		}

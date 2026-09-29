@@ -196,6 +196,22 @@ func TestUSPortfolioUsesEachBrokersExchangeRateInKRWMode(t *testing.T) {
 	}
 }
 
+func TestDashboardIncludesNHUSBalanceWithoutKiwoom(t *testing.T) {
+	m := Model{width: 100, snapshot: app.Snapshot{
+		Balances: []domain.Balance{
+			{Broker: domain.BrokerNH, Currency: domain.KRW, ValueTotal: decimal.NewFromInt(1_000_000), ProfitLoss: decimal.NewFromInt(50_000)},
+			{Broker: domain.BrokerNH, Currency: domain.USD, ValueTotal: decimal.NewFromInt(600), Cash: decimal.NewFromInt(400), ProfitLoss: decimal.NewFromInt(100), ValueTotalKRW: decimal.NewFromInt(840_000), ProfitLossKRW: decimal.NewFromInt(140_000), ExchangeRate: decimal.NewFromInt(1400)},
+		},
+		FX: domain.FXRate{Provider: domain.BrokerNH, Rate: decimal.NewFromInt(1400)},
+	}}
+	view := m.dashboardView()
+	for _, want := range []string{"2,400,000원", "+190,000원", "$1000.00", "+$100.00", "1400.00원"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("NH-only dashboard value %q missing: %q", want, view)
+		}
+	}
+}
+
 func TestNHPortfolioDoesNotFallBackToKiwoomExchangeRate(t *testing.T) {
 	position := domain.Position{
 		Broker: domain.BrokerNH, Symbol: domain.Symbol{Name: "애플", Market: domain.MarketUS, Currency: domain.USD},
