@@ -290,14 +290,32 @@ func (c *Client) foreignPositions(ctx context.Context, accountID string) ([]doma
 		}
 		name := first(p, "iem_nm", "oss_iem_eng_nm")
 		symbol := domain.Symbol{Code: code, Ticker: code, Name: name, Market: domain.MarketUS, Currency: domain.USD}
+		purchaseValue := decAny(p, "fc_abk_amt", "fc_cns_bse_phs_xps")
+		marketValue := decAny(p, "fc_eal_amt")
+		profitLoss := decAnySigned(p, "fc_eal_pls_amt")
+		purchaseValueKRW := decAny(p, "krw_abk_amt1", "krw_cns_bse_phs_xps")
+		marketValueKRW := decAny(p, "krw_eal_amt")
+		profitLossKRW := decAnySigned(p, "krw_eal_pls_amt")
+		exchangeRate := decAny(p, "tdt_sby_bse_xcg_rt")
+		// The live NH response may omit tdt_sby_bse_xcg_rt while still
+		// returning its KRW valuations. Recover the same broker rate from
+		// those paired values so non-KRW unit prices can also be converted.
+		if !exchangeRate.IsPositive() {
+			switch {
+			case marketValue.IsPositive() && marketValueKRW.IsPositive():
+				exchangeRate = marketValueKRW.Div(marketValue)
+			case purchaseValue.IsPositive() && purchaseValueKRW.IsPositive():
+				exchangeRate = purchaseValueKRW.Div(purchaseValue)
+			}
+		}
 		positions = append(positions, domain.Position{
 			AccountID: accountID, Broker: c.ID(), Symbol: symbol,
 			Quantity: decAny(p, "cns_bse_bnc_qty"), Tradable: decAny(p, "sll_pbl_qty1"),
 			AveragePrice: decAny(p, "fc_avg_phs_pr", "fc_phs_uit_pr"), CurrentPrice: decAny(p, "fc_sec_end_pr"),
-			PurchaseValue: decAny(p, "fc_abk_amt", "fc_cns_bse_phs_xps"), MarketValue: decAny(p, "fc_eal_amt"),
-			ProfitLoss: decAnySigned(p, "fc_eal_pls_amt"), ProfitRate: decAnySigned(p, "eal_pft_rt", "eal_pft_rt1"),
-			ExchangeRate: decAny(p, "tdt_sby_bse_xcg_rt"),
-			AsOf:         time.Now(),
+			PurchaseValue: purchaseValue, MarketValue: marketValue,
+			ProfitLoss: profitLoss, ProfitRate: decAnySigned(p, "eal_pft_rt", "eal_pft_rt1"),
+			PurchaseValueKRW: purchaseValueKRW, MarketValueKRW: marketValueKRW, ProfitLossKRW: profitLossKRW,
+			ExchangeRate: exchangeRate, AsOf: time.Now(),
 		})
 	}
 	return positions, nil

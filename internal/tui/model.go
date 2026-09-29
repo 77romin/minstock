@@ -857,17 +857,21 @@ func (m Model) portfolioView() string {
 		lines = append(lines, m.renderPortfolioHeader(visible))
 	}
 	totalValue, totalPurchase, totalProfit := decimal.Zero, decimal.Zero, decimal.Zero
-	totalAmountAvailable := true
+	totalProfitAvailable, totalPurchaseAvailable := true, true
 	for _, p := range items {
-		value, purchase, profit := p.MarketValue, p.PurchaseValue, p.ProfitLoss
+		totalValue = totalValue.Add(p.MarketValue)
+		purchase, profit := p.PurchaseValue, p.ProfitLoss
 		if m.currency == currencyKRW && p.Symbol.Currency == domain.USD {
-			if rate := m.positionExchangeRate(p); rate.IsPositive() {
-				value, purchase, profit = value.Mul(rate), purchase.Mul(rate), profit.Mul(rate)
-			} else {
-				totalAmountAvailable = false
+			var ok bool
+			purchase, ok = m.positionKRWValue(p.PurchaseValue, p.PurchaseValueKRW, p)
+			if !ok {
+				totalPurchaseAvailable = false
+			}
+			profit, ok = m.positionKRWValue(p.ProfitLoss, p.ProfitLossKRW, p)
+			if !ok {
+				totalProfitAvailable = false
 			}
 		}
-		totalValue = totalValue.Add(value)
 		totalPurchase = totalPurchase.Add(purchase)
 		totalProfit = totalProfit.Add(profit)
 	}
@@ -886,7 +890,7 @@ func (m Model) portfolioView() string {
 	}
 	if len(items) > 0 {
 		totalRate := decimal.Zero
-		if !totalPurchase.IsZero() {
+		if totalProfitAvailable && totalPurchaseAvailable && !totalPurchase.IsZero() {
 			totalRate = totalProfit.Div(totalPurchase).Mul(decimal.NewFromInt(100))
 		}
 		lines = append(lines, "  "+muted.Render(renderPortfolioSeparator(visible)))
@@ -894,7 +898,7 @@ func (m Model) portfolioView() string {
 		if m.currency == currencyKRW && totalCurrency == domain.USD {
 			totalCurrency = domain.KRW
 		}
-		lines = append(lines, "  "+m.renderPortfolioTotal(totalProfit, totalRate, totalCurrency, totalAmountAvailable, visible))
+		lines = append(lines, "  "+m.renderPortfolioTotal(totalProfit, totalRate, totalCurrency, totalProfitAvailable, visible))
 	}
 	if len(items) == 0 {
 		lines = append(lines, "  보유 종목이 없습니다.")
@@ -961,16 +965,16 @@ func (m Model) renderPortfolioRow(p domain.Position, weight decimal.Decimal, col
 	values := []string{
 		brokerDisplayName(p.Broker),
 		p.Symbol.Name,
-		m.formatPositionSignedAmount(p.ProfitLoss, p),
+		m.formatPositionSignedAmount(p.ProfitLoss, p.ProfitLossKRW, p),
 		signedPercent(p.ProfitRate),
 		weight.StringFixed(2) + "%",
-		m.formatPositionAmount(p.MarketValue, p),
+		m.formatPositionAmount(p.MarketValue, p.MarketValueKRW, p),
 		commaNumber(p.Quantity.String()),
 		commaNumber(p.Quantity.String()),
-		m.formatPositionAmount(p.MarketValue, p),
-		m.formatPositionAmount(p.AveragePrice, p),
-		m.formatPositionAmount(p.CurrentPrice, p),
-		m.formatPositionAmount(p.PurchaseValue, p),
+		m.formatPositionAmount(p.MarketValue, p.MarketValueKRW, p),
+		m.formatPositionAmount(p.AveragePrice, decimal.Zero, p),
+		m.formatPositionAmount(p.CurrentPrice, decimal.Zero, p),
+		m.formatPositionAmount(p.PurchaseValue, p.PurchaseValueKRW, p),
 	}
 	cells := make([]string, 0, len(columns))
 	for _, index := range columns {
@@ -1371,22 +1375,32 @@ func (m Model) positionExchangeRate(p domain.Position) decimal.Decimal {
 	return decimal.Zero
 }
 
-func (m Model) formatPositionAmount(v decimal.Decimal, p domain.Position) string {
+func (m Model) positionKRWValue(native, brokerKRW decimal.Decimal, p domain.Position) (decimal.Decimal, bool) {
+	if !brokerKRW.IsZero() || native.IsZero() {
+		return brokerKRW, true
+	}
+	if rate := m.positionExchangeRate(p); rate.IsPositive() {
+		return native.Mul(rate), true
+	}
+	return decimal.Zero, false
+}
+
+func (m Model) formatPositionAmount(v, brokerKRW decimal.Decimal, p domain.Position) string {
 	if p.Symbol.Currency != domain.USD || m.currency != currencyKRW {
 		return m.formatAmount(v, p.Symbol.Currency)
 	}
-	if rate := m.positionExchangeRate(p); rate.IsPositive() {
-		return "₩" + money(v.Mul(rate))
+	if krw, ok := m.positionKRWValue(v, brokerKRW, p); ok {
+		return "₩" + money(krw)
 	}
 	return "₩-"
 }
 
-func (m Model) formatPositionSignedAmount(v decimal.Decimal, p domain.Position) string {
+func (m Model) formatPositionSignedAmount(v, brokerKRW decimal.Decimal, p domain.Position) string {
 	if p.Symbol.Currency != domain.USD || m.currency != currencyKRW {
 		return m.formatSignedAmount(v, p.Symbol.Currency)
 	}
-	if rate := m.positionExchangeRate(p); rate.IsPositive() {
-		return signedMoney(v.Mul(rate)) + "원"
+	if krw, ok := m.positionKRWValue(v, brokerKRW, p); ok {
+		return signedMoney(krw) + "원"
 	}
 	return "₩-"
 }

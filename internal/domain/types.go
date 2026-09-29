@@ -91,6 +91,12 @@ type Position struct {
 	MarketValue   decimal.Decimal
 	ProfitLoss    decimal.Decimal
 	ProfitRate    decimal.Decimal
+	// The KRW fields preserve broker-calculated values when an overseas
+	// balance response supplies them. They take precedence over converting
+	// the corresponding USD value in the UI.
+	PurchaseValueKRW decimal.Decimal
+	MarketValueKRW   decimal.Decimal
+	ProfitLossKRW    decimal.Decimal
 	// ExchangeRate is the broker-provided USD/KRW rate used for this
 	// position's account valuation. It is zero for KRW positions or when the
 	// broker did not include an applicable rate in its balance response.

@@ -72,7 +72,8 @@ func TestBalanceAndPositionsUseCurrentContractAndShareResponse(t *testing.T) {
 				"Output_1": []map[string]string{{
 					"iem_cd": "AAPL", "iem_nm": "애플", "cns_bse_bnc_qty": "3",
 					"fc_avg_phs_pr": "150", "fc_sec_end_pr": "200", "fc_eal_amt": "600",
-					"fc_eal_pls_amt": "150", "tdt_sby_bse_xcg_rt": "1382.45",
+					"fc_abk_amt": "500", "fc_eal_pls_amt": "150",
+					"krw_abk_amt1": "690000", "krw_eal_amt": "829470", "krw_eal_pls_amt": "139470",
 				}},
 			})
 		default:
@@ -96,7 +97,10 @@ func TestBalanceAndPositionsUseCurrentContractAndShareResponse(t *testing.T) {
 		t.Fatalf("unexpected positions: %#v", positions)
 	}
 	if positions[1].Broker != domain.BrokerNH || !positions[1].ExchangeRate.Equal(decimal.RequireFromString("1382.45")) {
-		t.Fatalf("NH exchange rate was not preserved: %#v", positions[1])
+		t.Fatalf("NH exchange rate was not derived from broker KRW valuation: %#v", positions[1])
+	}
+	if !positions[1].MarketValueKRW.Equal(decimal.NewFromInt(829470)) || !positions[1].ProfitLossKRW.Equal(decimal.NewFromInt(139470)) {
+		t.Fatalf("NH broker KRW values were not preserved: %#v", positions[1])
 	}
 	if balanceCalls.Load() != 1 {
 		t.Fatalf("balance endpoint called %d times; want 1", balanceCalls.Load())
