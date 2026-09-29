@@ -91,7 +91,11 @@ type Position struct {
 	MarketValue   decimal.Decimal
 	ProfitLoss    decimal.Decimal
 	ProfitRate    decimal.Decimal
-	AsOf          time.Time
+	// ExchangeRate is the broker-provided USD/KRW rate used for this
+	// position's account valuation. It is zero for KRW positions or when the
+	// broker did not include an applicable rate in its balance response.
+	ExchangeRate decimal.Decimal
+	AsOf         time.Time
 }
 
 type Quote struct {

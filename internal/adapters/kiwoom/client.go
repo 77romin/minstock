@@ -347,7 +347,7 @@ func (c *Client) usPositions(ctx context.Context, accountID string) ([]domain.Po
 		}
 		code := strings.TrimSpace(p.Code)
 		symbol := domain.Symbol{Code: code, Ticker: code, Name: strings.TrimSpace(p.Name), Market: domain.MarketUS, Currency: currency, Exchange: normalizeUSExchange(p.Exchange)}
-		positions = append(positions, domain.Position{AccountID: accountID, Broker: c.ID(), Symbol: symbol, Quantity: num(p.Quantity), Tradable: num(p.Tradable), AveragePrice: num(p.Average), CurrentPrice: num(p.Price), PurchaseValue: num(p.Purchase), MarketValue: num(p.Value), ProfitLoss: signed(p.Profit), ProfitRate: signed(p.Rate), AsOf: time.Now()})
+		positions = append(positions, domain.Position{AccountID: accountID, Broker: c.ID(), Symbol: symbol, Quantity: num(p.Quantity), Tradable: num(p.Tradable), AveragePrice: num(p.Average), CurrentPrice: num(p.Price), PurchaseValue: num(p.Purchase), MarketValue: num(p.Value), ProfitLoss: signed(p.Profit), ProfitRate: signed(p.Rate), ExchangeRate: num(p.ExchangeRate), AsOf: time.Now()})
 	}
 	return positions, nil
 }

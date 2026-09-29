@@ -83,7 +83,7 @@ func TestUSPortfolioQuoteAndCandles(t *testing.T) {
 		}
 		switch r.Header.Get("api-id") {
 		case "ust21070":
-			_ = json.NewEncoder(w).Encode(map[string]any{"crnc_code": "USD", "tot_evlt_amt": "4588.20", "tot_prch_amt": "4200.50", "tot_pl_amt": "387.70", "tot_pl_rt": "9.23", "result_list": []map[string]string{{"stex_nm": "NASDAQ", "crnc_code": "USD", "stk_cd": "AAPL", "frgn_stk_nm": "Apple", "poss_qty": "20", "sell_alowq": "20", "frgn_stk_book_uv": "210.025", "now_pric": "229.41", "evlt_amt": "4588.20", "pl_amt": "387.70", "pl_rt": "9.23", "frgn_stk_book_amt": "4200.50"}}, "return_code": 0})
+			_ = json.NewEncoder(w).Encode(map[string]any{"crnc_code": "USD", "tot_evlt_amt": "4588.20", "tot_prch_amt": "4200.50", "tot_pl_amt": "387.70", "tot_pl_rt": "9.23", "result_list": []map[string]string{{"stex_nm": "NASDAQ", "crnc_code": "USD", "stk_cd": "AAPL", "frgn_stk_nm": "Apple", "poss_qty": "20", "sell_alowq": "20", "frgn_stk_book_uv": "210.025", "now_pric": "229.41", "evlt_amt": "4588.20", "pl_amt": "387.70", "pl_rt": "9.23", "frgn_stk_book_amt": "4200.50", "exch_rate": "1375.25"}}, "return_code": 0})
 		case "ust21110":
 			_ = json.NewEncoder(w).Encode(map[string]any{"result_list": []map[string]string{{"crnc_code": "USD", "fc_entra": "812.45"}}, "return_code": 0})
 		case "usa20100":
@@ -105,7 +105,7 @@ func TestUSPortfolioQuoteAndCandles(t *testing.T) {
 		t.Fatalf("US balance: %#v %v", balance, err)
 	}
 	positions, err := client.Positions(t.Context(), accountUS)
-	if err != nil || len(positions) != 1 || positions[0].Symbol.Exchange != "ND" {
+	if err != nil || len(positions) != 1 || positions[0].Symbol.Exchange != "ND" || !positions[0].ExchangeRate.Equal(decimal.RequireFromString("1375.25")) {
 		t.Fatalf("US positions: %#v %v", positions, err)
 	}
 	quote, err := client.Quote(t.Context(), positions[0].Symbol)

@@ -179,6 +179,38 @@ func TestPortfolioTotalUsesAggregatePurchaseReturn(t *testing.T) {
 	}
 }
 
+func TestUSPortfolioUsesEachBrokersExchangeRateInKRWMode(t *testing.T) {
+	positions := []domain.Position{
+		{Broker: domain.BrokerNH, Symbol: domain.Symbol{Name: "애플", Market: domain.MarketUS, Currency: domain.USD}, MarketValue: decimal.NewFromInt(600), PurchaseValue: decimal.NewFromInt(500), ProfitLoss: decimal.NewFromInt(100), ExchangeRate: decimal.NewFromInt(1400)},
+		{Broker: domain.BrokerKiwoom, Symbol: domain.Symbol{Name: "엔비디아", Market: domain.MarketUS, Currency: domain.USD}, MarketValue: decimal.NewFromInt(300), PurchaseValue: decimal.NewFromInt(250), ProfitLoss: decimal.NewFromInt(50), ExchangeRate: decimal.NewFromInt(1300)},
+	}
+	m := Model{screen: portfolioScreen, portfolioTab: filterUS, currency: currencyKRW, width: 260, snapshot: app.Snapshot{
+		Positions: positions,
+		FX:        domain.FXRate{Rate: decimal.NewFromInt(9999), Provider: domain.BrokerKiwoom},
+	}}
+	view := m.portfolioView()
+	for _, want := range []string{"+140,000원", "₩840,000", "+65,000원", "₩390,000", "+205,000원"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("broker-specific KRW value %q missing: %q", want, view)
+		}
+	}
+}
+
+func TestNHPortfolioDoesNotFallBackToKiwoomExchangeRate(t *testing.T) {
+	position := domain.Position{
+		Broker: domain.BrokerNH, Symbol: domain.Symbol{Name: "애플", Market: domain.MarketUS, Currency: domain.USD},
+		MarketValue: decimal.NewFromInt(600), PurchaseValue: decimal.NewFromInt(500), ProfitLoss: decimal.NewFromInt(100),
+	}
+	m := Model{screen: portfolioScreen, portfolioTab: filterUS, currency: currencyKRW, width: 260, snapshot: app.Snapshot{
+		Positions: []domain.Position{position},
+		FX:        domain.FXRate{Rate: decimal.NewFromInt(1400), Provider: domain.BrokerKiwoom},
+	}}
+	view := m.portfolioView()
+	if strings.Contains(view, "+140,000원") || !strings.Contains(view, "₩-") {
+		t.Fatalf("NH position must not use Kiwoom exchange rate: %q", view)
+	}
+}
+
 func TestBrokerDisplayNames(t *testing.T) {
 	cases := map[domain.BrokerID]string{
 		domain.BrokerKiwoom: "키움",

@@ -296,7 +296,8 @@ func (c *Client) foreignPositions(ctx context.Context, accountID string) ([]doma
 			AveragePrice: decAny(p, "fc_avg_phs_pr", "fc_phs_uit_pr"), CurrentPrice: decAny(p, "fc_sec_end_pr"),
 			PurchaseValue: decAny(p, "fc_abk_amt", "fc_cns_bse_phs_xps"), MarketValue: decAny(p, "fc_eal_amt"),
 			ProfitLoss: decAnySigned(p, "fc_eal_pls_amt"), ProfitRate: decAnySigned(p, "eal_pft_rt", "eal_pft_rt1"),
-			AsOf: time.Now(),
+			ExchangeRate: decAny(p, "tdt_sby_bse_xcg_rt"),
+			AsOf:         time.Now(),
 		})
 	}
 	return positions, nil
