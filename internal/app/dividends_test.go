@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -111,6 +112,14 @@ func TestDividendFailureCooldownPreventsRefreshStorm(t *testing.T) {
 	second := service.DividendPortfolio(t.Context(), positions, domain.FXRate{})
 	if provider.calls.Load() != 1 || len(first.Warnings) != 1 || len(second.Warnings) != 1 || !strings.Contains(second.Warnings[0], "최근 조회 실패") {
 		t.Fatalf("failure cooldown did not apply: calls=%d first=%#v second=%#v", provider.calls.Load(), first.Warnings, second.Warnings)
+	}
+	payload, _, err := repo.LoadCache(t.Context(), dividendFailurePrefix+"QLD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failure dividendFailure
+	if err := json.Unmarshal(payload, &failure); err != nil || failure.RetryAt.Before(time.Now().Add(23*time.Hour)) {
+		t.Fatalf("daily limit must back off for 24 hours: %#v err=%v", failure, err)
 	}
 }
 

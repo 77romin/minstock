@@ -61,7 +61,8 @@ type dividendCall struct {
 }
 
 type dividendFailure struct {
-	Message string `json:"message"`
+	Message string    `json:"message"`
+	RetryAt time.Time `json:"retry_at"`
 }
 
 func (s *Service) SetDividendProvider(provider ports.DividendProvider) {
@@ -176,12 +177,12 @@ func (s *Service) loadDividendEvents(ctx context.Context, symbol string) ([]doma
 		}
 		return nil, domain.FreshCached, time.Time{}, fmt.Errorf("배당 API 키가 없습니다: minstock setup dividend")
 	}
-	if failure, failedAt, ok := s.recentDividendFailure(ctx, symbol); ok {
+	if failure, retryAt, ok := s.recentDividendFailure(ctx, symbol); ok {
 		if cacheValid {
 			return cached, domain.FreshCached, updatedAt, nil
 		}
-		remaining := dividendFailureTTL - time.Since(failedAt)
-		return nil, "", failedAt, fmt.Errorf("최근 조회 실패: %s (약 %d분 후 재시도)", failure, max(1, int(remaining.Minutes())+1))
+		remaining := time.Until(retryAt)
+		return nil, "", retryAt, fmt.Errorf("최근 조회 실패: %s (약 %d분 후 재시도)", failure, max(1, int(remaining.Minutes())+1))
 	}
 	return s.fetchDividendEvents(ctx, symbol, key, cached, updatedAt, cacheValid)
 }
@@ -235,18 +236,33 @@ func (s *Service) fetchDividendEvents(ctx context.Context, symbol, cacheKey stri
 
 func (s *Service) recentDividendFailure(ctx context.Context, symbol string) (string, time.Time, bool) {
 	payload, updatedAt, err := s.repo.LoadCache(ctx, dividendFailurePrefix+symbol)
-	if err != nil || time.Since(updatedAt) >= dividendFailureTTL {
+	if err != nil {
 		return "", time.Time{}, false
 	}
 	var failure dividendFailure
 	if json.Unmarshal(payload, &failure) != nil || strings.TrimSpace(failure.Message) == "" {
 		return "", time.Time{}, false
 	}
-	return failure.Message, updatedAt, true
+	if failure.RetryAt.IsZero() {
+		failure.RetryAt = updatedAt.Add(dividendFailureTTL)
+		if strings.Contains(failure.Message, "일일 호출 한도") || strings.Contains(strings.ToLower(failure.Message), "daily rate limit") {
+			failure.RetryAt = updatedAt.Add(24 * time.Hour)
+		}
+	}
+	if !time.Now().Before(failure.RetryAt) {
+		return "", time.Time{}, false
+	}
+	return failure.Message, failure.RetryAt, true
 }
 
 func (s *Service) saveDividendFailure(ctx context.Context, symbol string, loadErr error) {
-	payload, err := json.Marshal(dividendFailure{Message: loadErr.Error()})
+	retryAt := time.Now().Add(dividendFailureTTL)
+	message := loadErr.Error()
+	lower := strings.ToLower(message)
+	if strings.Contains(message, "일일 호출 한도") || strings.Contains(lower, "daily rate limit") || strings.Contains(lower, "25 requests") {
+		retryAt = time.Now().Add(24 * time.Hour)
+	}
+	payload, err := json.Marshal(dividendFailure{Message: message, RetryAt: retryAt})
 	if err == nil {
 		_ = s.repo.SaveCache(ctx, dividendFailurePrefix+symbol, payload)
 	}
