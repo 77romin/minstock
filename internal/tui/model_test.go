@@ -151,7 +151,7 @@ func TestAlertScreenNavigationAndRuleInput(t *testing.T) {
 	}
 	next, _ = m.handleKey("a")
 	m = next.(Model)
-	for _, key := range []string{"V", "O", "O", " ", "7", "0", "0"} {
+	for _, key := range []string{"V", "O", "O", "space", "7", "0", "0"} {
 		next, _ = m.handleKey(key)
 		m = next.(Model)
 	}

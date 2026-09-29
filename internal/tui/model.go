@@ -2240,6 +2240,8 @@ func (m Model) handleAlertInput(key string) (tea.Model, tea.Cmd) {
 			_, size := utf8.DecodeLastRuneInString(m.alertInput)
 			m.alertInput = m.alertInput[:len(m.alertInput)-size]
 		}
+	case "space":
+		m.alertInput += " "
 	default:
 		if utf8.RuneCountInString(key) == 1 {
 			m.alertInput += key
