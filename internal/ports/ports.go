@@ -56,6 +56,8 @@ type Repository interface {
 	RemoveLocalWatchlistItem(context.Context, domain.Symbol) error
 	SaveCache(context.Context, string, []byte) error
 	LoadCache(context.Context, string) ([]byte, time.Time, error)
+	SavePortfolioSnapshots(context.Context, []domain.PortfolioSnapshot) error
+	ListPortfolioSnapshots(context.Context, time.Time, time.Time) ([]domain.PortfolioSnapshot, error)
 	SaveCandles(context.Context, []domain.Candle) error
 	LoadCandles(context.Context, domain.CandleQuery) ([]domain.Candle, error)
 	Close() error

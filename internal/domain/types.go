@@ -84,6 +84,26 @@ type Balance struct {
 	AsOf             time.Time
 }
 
+// PortfolioSnapshot is one broker/account/currency ledger captured for a
+// calendar day. Native values are retained beside KRW-normalized values so
+// future performance views can separate market returns from FX effects.
+type PortfolioSnapshot struct {
+	Date             time.Time
+	CapturedAt       time.Time
+	AccountID        string
+	Broker           BrokerID
+	Currency         Currency
+	Cash             decimal.Decimal
+	PurchaseTotal    decimal.Decimal
+	ValueTotal       decimal.Decimal
+	ProfitLoss       decimal.Decimal
+	CashKRW          decimal.Decimal
+	PurchaseTotalKRW decimal.Decimal
+	ValueTotalKRW    decimal.Decimal
+	ProfitLossKRW    decimal.Decimal
+	ExchangeRate     decimal.Decimal
+}
+
 type Position struct {
 	AccountID     string
 	Broker        BrokerID

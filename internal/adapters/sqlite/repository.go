@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
 	"os"
@@ -105,6 +106,23 @@ CREATE TABLE IF NOT EXISTS app_cache (
   cache_key TEXT PRIMARY KEY,
   payload BLOB NOT NULL,
   updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+  snapshot_date TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  account_ref TEXT NOT NULL,
+  currency TEXT NOT NULL,
+  cash TEXT NOT NULL,
+  purchase_total TEXT NOT NULL,
+  value_total TEXT NOT NULL,
+  profit_loss TEXT NOT NULL,
+  cash_krw TEXT NOT NULL,
+  purchase_total_krw TEXT NOT NULL,
+  value_total_krw TEXT NOT NULL,
+  profit_loss_krw TEXT NOT NULL,
+  exchange_rate TEXT NOT NULL,
+  PRIMARY KEY(snapshot_date, provider, account_ref, currency)
 );`
 	if _, err := r.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate sqlite: %w", err)
@@ -127,7 +145,7 @@ CREATE TABLE IF NOT EXISTS app_cache (
 		return fmt.Errorf("remove legacy demo watchlists: %w", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?),(2, ?),(3, ?),(4, ?),(5, ?)`, now, now, now, now, now)
+	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?),(2, ?),(3, ?),(4, ?),(5, ?),(6, ?)`, now, now, now, now, now, now)
 	return err
 }
 
@@ -149,6 +167,100 @@ func (r *Repository) LoadCache(ctx context.Context, key string) ([]byte, time.Ti
 		return nil, time.Time{}, err
 	}
 	return payload, stamp, nil
+}
+
+func accountRef(provider domain.BrokerID, accountID string) string {
+	sum := sha256.Sum256([]byte(string(provider) + "\x00" + accountID))
+	return fmt.Sprintf("%x", sum[:8])
+}
+
+func (r *Repository) SavePortfolioSnapshots(ctx context.Context, snapshots []domain.PortfolioSnapshot) error {
+	if len(snapshots) == 0 {
+		return nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO portfolio_snapshots(
+snapshot_date,captured_at,provider,account_ref,currency,cash,purchase_total,value_total,profit_loss,
+cash_krw,purchase_total_krw,value_total_krw,profit_loss_krw,exchange_rate)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(snapshot_date,provider,account_ref,currency) DO UPDATE SET
+captured_at=excluded.captured_at,cash=excluded.cash,purchase_total=excluded.purchase_total,
+value_total=excluded.value_total,profit_loss=excluded.profit_loss,cash_krw=excluded.cash_krw,
+purchase_total_krw=excluded.purchase_total_krw,value_total_krw=excluded.value_total_krw,
+profit_loss_krw=excluded.profit_loss_krw,exchange_rate=excluded.exchange_rate`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, snapshot := range snapshots {
+		capturedAt := snapshot.CapturedAt
+		if capturedAt.IsZero() {
+			capturedAt = time.Now()
+		}
+		date := snapshot.Date
+		if date.IsZero() {
+			date = capturedAt
+		}
+		_, err = stmt.ExecContext(ctx,
+			date.In(time.Local).Format("2006-01-02"), capturedAt.UTC().Format(time.RFC3339Nano), snapshot.Broker,
+			accountRef(snapshot.Broker, snapshot.AccountID), snapshot.Currency,
+			snapshot.Cash.String(), snapshot.PurchaseTotal.String(), snapshot.ValueTotal.String(), snapshot.ProfitLoss.String(),
+			snapshot.CashKRW.String(), snapshot.PurchaseTotalKRW.String(), snapshot.ValueTotalKRW.String(), snapshot.ProfitLossKRW.String(), snapshot.ExchangeRate.String(),
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (r *Repository) ListPortfolioSnapshots(ctx context.Context, from, to time.Time) ([]domain.PortfolioSnapshot, error) {
+	if from.IsZero() {
+		from = time.Unix(0, 0)
+	}
+	if to.IsZero() {
+		to = time.Now().AddDate(100, 0, 0)
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT snapshot_date,captured_at,provider,currency,cash,purchase_total,
+value_total,profit_loss,cash_krw,purchase_total_krw,value_total_krw,profit_loss_krw,exchange_rate
+FROM portfolio_snapshots WHERE snapshot_date>=? AND snapshot_date<=?
+ORDER BY snapshot_date,provider,account_ref,currency`, from.In(time.Local).Format("2006-01-02"), to.In(time.Local).Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []domain.PortfolioSnapshot
+	for rows.Next() {
+		var snapshot domain.PortfolioSnapshot
+		var date, capturedAt string
+		var cash, purchase, value, profit, cashKRW, purchaseKRW, valueKRW, profitKRW, rate string
+		if err := rows.Scan(&date, &capturedAt, &snapshot.Broker, &snapshot.Currency, &cash, &purchase, &value, &profit, &cashKRW, &purchaseKRW, &valueKRW, &profitKRW, &rate); err != nil {
+			return nil, err
+		}
+		snapshot.Date, err = time.ParseInLocation("2006-01-02", date, time.Local)
+		if err != nil {
+			return nil, err
+		}
+		snapshot.CapturedAt, err = time.Parse(time.RFC3339Nano, capturedAt)
+		if err != nil {
+			return nil, err
+		}
+		snapshot.Cash = mustDecimal(cash)
+		snapshot.PurchaseTotal = mustDecimal(purchase)
+		snapshot.ValueTotal = mustDecimal(value)
+		snapshot.ProfitLoss = mustDecimal(profit)
+		snapshot.CashKRW = mustDecimal(cashKRW)
+		snapshot.PurchaseTotalKRW = mustDecimal(purchaseKRW)
+		snapshot.ValueTotalKRW = mustDecimal(valueKRW)
+		snapshot.ProfitLossKRW = mustDecimal(profitKRW)
+		snapshot.ExchangeRate = mustDecimal(rate)
+		result = append(result, snapshot)
+	}
+	return result, rows.Err()
 }
 
 func (r *Repository) ensureColumn(ctx context.Context, table, column, definition string) error {

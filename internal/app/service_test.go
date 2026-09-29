@@ -56,6 +56,15 @@ func TestDemoServiceEndToEnd(t *testing.T) {
 	if len(core.Positions) == 0 || len(core.Watchlist) == 0 || core.FX.Rate.IsZero() || len(core.Quotes) != 0 {
 		t.Fatalf("incomplete core snapshot: %#v", core)
 	}
+	history, err := repo.ListPortfolioSnapshots(ctx, core.LoadedAt, core.LoadedAt)
+	if err != nil || len(history) != len(core.Balances) {
+		t.Fatalf("portfolio snapshots: %#v %v", history, err)
+	}
+	for _, snapshot := range history {
+		if snapshot.Currency == domain.KRW && !snapshot.ExchangeRate.IsZero() {
+			t.Fatalf("KRW snapshot must not carry USD/KRW rate: %#v", snapshot)
+		}
+	}
 	snapshot := service.EnrichDashboard(ctx, core)
 	if len(snapshot.Positions) == 0 || len(snapshot.Watchlist) == 0 || snapshot.FX.Rate.IsZero() {
 		t.Fatalf("incomplete snapshot: %#v", snapshot)

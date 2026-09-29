@@ -123,3 +123,45 @@ func TestDashboardCacheRoundTrip(t *testing.T) {
 		t.Fatalf("cache round trip: payload=%q updated=%s err=%v", got, updatedAt, err)
 	}
 }
+
+func TestPortfolioSnapshotsUpsertDailyValuesWithoutRawAccountID(t *testing.T) {
+	ctx := context.Background()
+	repo, err := Open(filepath.Join(t.TempDir(), "minstock.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	if err := repo.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	loc := time.FixedZone("KST", 9*60*60)
+	first := time.Date(2026, 9, 29, 10, 0, 0, 0, loc)
+	snapshot := domain.PortfolioSnapshot{
+		Date: first, CapturedAt: first, AccountID: "12345678901", Broker: domain.BrokerNH, Currency: domain.USD,
+		Cash: decimal.NewFromInt(100), ValueTotal: decimal.NewFromInt(900), ProfitLoss: decimal.NewFromInt(50),
+		CashKRW: decimal.NewFromInt(140000), ValueTotalKRW: decimal.NewFromInt(1260000), ProfitLossKRW: decimal.NewFromInt(70000), ExchangeRate: decimal.NewFromInt(1400),
+	}
+	if err := repo.SavePortfolioSnapshots(ctx, []domain.PortfolioSnapshot{snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.CapturedAt = first.Add(2 * time.Hour)
+	snapshot.ValueTotal = decimal.NewFromInt(950)
+	snapshot.ValueTotalKRW = decimal.NewFromInt(1330000)
+	if err := repo.SavePortfolioSnapshots(ctx, []domain.PortfolioSnapshot{snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := repo.ListPortfolioSnapshots(ctx, first, first)
+	if err != nil || len(loaded) != 1 {
+		t.Fatalf("snapshots: %#v %v", loaded, err)
+	}
+	if !loaded[0].ValueTotal.Equal(decimal.NewFromInt(950)) || !loaded[0].ValueTotalKRW.Equal(decimal.NewFromInt(1330000)) || !loaded[0].CapturedAt.Equal(snapshot.CapturedAt.UTC()) {
+		t.Fatalf("daily snapshot was not updated: %#v", loaded[0])
+	}
+	var account string
+	if err := repo.db.QueryRowContext(ctx, `SELECT account_ref FROM portfolio_snapshots`).Scan(&account); err != nil {
+		t.Fatal(err)
+	}
+	if account == snapshot.AccountID || len(account) != 16 {
+		t.Fatalf("account reference was not hashed: %q", account)
+	}
+}

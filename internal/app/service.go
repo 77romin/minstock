@@ -214,6 +214,11 @@ func (s *Service) DashboardCore(ctx context.Context) Snapshot {
 			}
 		}
 	}
+	if snapshots := portfolioSnapshots(snap.Balances, snap.FX, snap.LoadedAt); len(snapshots) > 0 {
+		if err := s.repo.SavePortfolioSnapshots(ctx, snapshots); err != nil {
+			snap.Warnings = append(snap.Warnings, err.Error())
+		}
+	}
 	items, err := s.repo.ListWatchlist(ctx)
 	if err == nil {
 		snap.Watchlist = items
@@ -224,6 +229,44 @@ func (s *Service) DashboardCore(ctx context.Context) Snapshot {
 		snap.Warnings = append(snap.Warnings, err.Error())
 	}
 	return snap
+}
+
+func portfolioSnapshots(balances []domain.Balance, fx domain.FXRate, capturedAt time.Time) []domain.PortfolioSnapshot {
+	result := make([]domain.PortfolioSnapshot, 0, len(balances))
+	for _, balance := range balances {
+		rate := decimal.Zero
+		if balance.Currency == domain.USD {
+			rate = balance.ExchangeRate
+			if !rate.IsPositive() && fx.Provider == balance.Broker {
+				rate = fx.Rate
+			}
+		}
+		cashKRW, purchaseKRW := balance.CashKRW, balance.PurchaseTotalKRW
+		valueKRW, profitKRW := balance.ValueTotalKRW, balance.ProfitLossKRW
+		if balance.Currency == domain.KRW {
+			cashKRW, purchaseKRW = balance.Cash, balance.PurchaseTotal
+			valueKRW, profitKRW = balance.ValueTotal, balance.ProfitLoss
+		} else if rate.IsPositive() {
+			if cashKRW.IsZero() {
+				cashKRW = balance.Cash.Mul(rate)
+			}
+			if purchaseKRW.IsZero() {
+				purchaseKRW = balance.PurchaseTotal.Mul(rate)
+			}
+			if valueKRW.IsZero() {
+				valueKRW = balance.ValueTotal.Mul(rate)
+			}
+			if profitKRW.IsZero() {
+				profitKRW = balance.ProfitLoss.Mul(rate)
+			}
+		}
+		result = append(result, domain.PortfolioSnapshot{
+			Date: capturedAt, CapturedAt: capturedAt, AccountID: balance.AccountID, Broker: balance.Broker, Currency: balance.Currency,
+			Cash: balance.Cash, PurchaseTotal: balance.PurchaseTotal, ValueTotal: balance.ValueTotal, ProfitLoss: balance.ProfitLoss,
+			CashKRW: cashKRW, PurchaseTotalKRW: purchaseKRW, ValueTotalKRW: valueKRW, ProfitLossKRW: profitKRW, ExchangeRate: rate,
+		})
+	}
+	return result
 }
 
 // EnrichDashboard fills market quotes and derived reports after the core
