@@ -181,7 +181,7 @@ func TestAlertViewShowsHistoryAndRules(t *testing.T) {
 func TestNarrowHeaderFitsWithAlertTab(t *testing.T) {
 	m := Model{width: 80, mode: "connected", screen: alertScreen}
 	header := m.header()
-	if width := lipgloss.Width(header); width > 80 || !strings.Contains(header, "9알") {
+	if width := lipgloss.Width(header); width > 80 || !strings.Contains(header, "알림") {
 		t.Fatalf("narrow header width=%d header=%q", width, header)
 	}
 }

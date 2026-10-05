@@ -1462,8 +1462,10 @@ var (
 
 func (m Model) header() string {
 	labels := []string{"1 현황", "2 내 주식", "3 검색", "4 관심", "5 급등", "6 성과", "7 배당", "8 비중", "9 알림", "0 뉴스"}
+	gap := "  "
 	if m.width < 110 {
-		labels = []string{"1현", "2주", "3검", "4관", "5급", "6성", "7배", "8비", "9알", "0뉴"}
+		labels = []string{"현황", "주식", "검색", "관심", "급등", "성과", "배당", "비중", "알림", "뉴스"}
+		gap = " "
 	}
 	active := m.screen
 	if active == detailScreen || active == helpScreen || active == diagnosticsScreen {
@@ -1480,7 +1482,7 @@ func (m Model) header() string {
 			tabs[i] = label
 		}
 	}
-	return brand.Render(" MINSTOCK ") + "  " + strings.Join(tabs, "  ") + "  " + muted.Render("["+m.mode+"]")
+	return brand.Render(" MINSTOCK ") + "  " + strings.Join(tabs, gap) + "  " + muted.Render("["+m.mode+"]")
 }
 
 func (m Model) body() string {
