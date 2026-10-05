@@ -66,7 +66,7 @@ func (m Model) loadNewsFeed(us ...bool) (tea.Model, tea.Cmd) {
 	})
 }
 
-func (m Model) filteredFeed() []app.NewsFeedEntry {
+func (m Model) scopedFeed() []app.NewsFeedEntry {
 	var result []app.NewsFeedEntry
 	symbolKey := ""
 	if m.feedSymbol > 0 && m.feedSymbol <= len(m.feed.Symbols) {
@@ -91,6 +91,41 @@ func (m Model) filteredFeed() []app.NewsFeedEntry {
 		}
 	}
 	return result
+}
+
+func (m Model) feedEntrySymbols(entry app.NewsFeedEntry) []domain.Symbol {
+	if m.feedSymbol <= 0 || m.feedSymbol > len(m.feed.Symbols) {
+		return entry.Symbols
+	}
+	key := app.NewsFeedSymbolKey(m.feed.Symbols[m.feedSymbol-1])
+	var result []domain.Symbol
+	for _, symbol := range entry.Symbols {
+		if app.NewsFeedSymbolKey(symbol) == key {
+			result = append(result, symbol)
+		}
+	}
+	return result
+}
+
+func (m Model) filteredFeed() []app.NewsFeedEntry {
+	var result []app.NewsFeedEntry
+	for _, entry := range m.scopedFeed() {
+		if m.newsPreferences.Allows(entry.Item, m.feedEntrySymbols(entry)) {
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
+func (m Model) compactFeedQualityInfo() bool {
+	return m.feedInfo && m.height < 28 && m.newsFilterSummary() != ""
+}
+
+func (m Model) feedWarningBatchSize() int {
+	if m.compactFeedQualityInfo() {
+		return 1
+	}
+	return 2
 }
 
 func (m *Model) feedMarkRead(id string, read bool) tea.Cmd {
@@ -133,7 +168,8 @@ func (m Model) handleFeedKey(key string) (tea.Model, tea.Cmd, bool) {
 		m.cursor = 0
 	case "w":
 		m.feedInfo = true
-		m.feedWarningPage = (m.feedWarningPage + 1) % max(1, (len(m.feed.Warnings)+1)/2)
+		batch := m.feedWarningBatchSize()
+		m.feedWarningPage = (m.feedWarningPage + 1) % max(1, (len(m.feed.Warnings)+batch-1)/batch)
 	case "r":
 		next, cmd := m.loadNewsFeed()
 		return next, cmd, true
@@ -210,18 +246,32 @@ func (m Model) newsFeedView() string {
 	if m.feed.Limited {
 		lines = append(lines, trimDisplay(fmt.Sprintf("조회 구간 %d~%d · 나머지 캐시 · n 국내 / a 미국 다음", m.feed.Offset+1, min(m.feed.RefreshTotal, m.feed.Offset+app.NewsFeedBatchSize)), contentWidth))
 	}
-	warningStart := (m.feedWarningPage % max(1, (len(m.feed.Warnings)+1)/2)) * 2
+	warningBatch := m.feedWarningBatchSize()
+	warningPages := max(1, (len(m.feed.Warnings)+warningBatch-1)/warningBatch)
+	warningStart := (m.feedWarningPage % warningPages) * warningBatch
 	if m.feedInfo {
-		for i := warningStart; i < min(len(m.feed.Warnings), warningStart+2); i++ {
-			lines = append(lines, trimDisplay(domain.InformationText(m.feed.Warnings[i]), contentWidth))
+		for i := warningStart; i < min(len(m.feed.Warnings), warningStart+warningBatch); i++ {
+			line := domain.InformationText(m.feed.Warnings[i])
+			if warningBatch == 1 {
+				line = fmt.Sprintf("안내 %d/%d(w) · %s", warningStart+1, warningPages, line)
+			}
+			lines = append(lines, trimDisplay(line, contentWidth))
 		}
 	} else if len(m.feed.Warnings) > 0 {
 		lines = append(lines, fmt.Sprintf("조회 안내 %d건 · i 상태 보기", len(m.feed.Warnings)))
 	}
-	if m.feedInfo && len(m.feed.Warnings) > 2 {
-		lines = append(lines, fmt.Sprintf("안내 %d/%d · w 다음 안내", warningStart/2+1, (len(m.feed.Warnings)+1)/2))
+	if m.feedInfo && warningBatch > 1 && len(m.feed.Warnings) > warningBatch {
+		lines = append(lines, fmt.Sprintf("안내 %d/%d · w 다음 안내", warningStart/warningBatch+1, warningPages))
 	}
 	items := m.filteredFeed()
+	if hint := m.newsFilterSummary(); hint != "" {
+		lines = append(lines, trimDisplay(hint, contentWidth))
+	}
+	if m.feedInfo {
+		for _, line := range m.newsFilterDetails() {
+			lines = append(lines, trimDisplay(line, contentWidth))
+		}
+	}
 	var detail []string
 	if m.cursor >= 0 && m.cursor < len(items) {
 		entry := items[m.cursor]
@@ -235,7 +285,7 @@ func (m Model) newsFeedView() string {
 		}
 		detail = informationSelection(entry.Item, contentWidth, max(1, m.height-len(lines)-reserve), m.feedInfo)
 		detail = append(detail, trimDisplay("관련 종목 · "+strings.Join(related, ", "), contentWidth))
-		if m.feedInfo {
+		if m.feedInfo && !m.compactFeedQualityInfo() {
 			stamp := "미조회"
 			if !entry.ObservedAt.IsZero() {
 				stamp = freshnessName(entry.Freshness) + " · " + entry.ObservedAt.In(time.FixedZone("KST", 9*60*60)).Format("01-02 15:04")
@@ -257,6 +307,9 @@ func (m Model) newsFeedView() string {
 	}
 	if len(items) == 0 {
 		message := "현재 필터에 표시할 뉴스·공시가 없습니다."
+		if len(m.scopedFeed()) > 0 {
+			message = "품질 필터로 모두 제외되었습니다 · F 초기화"
+		}
 		if m.feedLoading {
 			message = "캐시와 최신 소식을 불러오고 있습니다…"
 		} else if m.feed.Total == 0 {

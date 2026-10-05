@@ -84,86 +84,92 @@ var intervals = []domain.CandleInterval{
 }
 
 type Model struct {
-	service             *app.Service
-	mode                string
-	screen              screen
-	previous            screen
-	width, height       int
-	cursor              int
-	loading             bool
-	err                 error
-	snapshot            app.Snapshot
-	history             []domain.PortfolioSnapshot
-	dividends           app.DividendReport
-	query               string
-	results             []domain.Symbol
-	selected            domain.Symbol
-	candles             []domain.Candle
-	detailQuote         domain.Quote
-	intervalIndex       int
-	maVisible           [4]bool
-	refreshEvery        time.Duration
-	filter              marketFilter
-	portfolioTab        marketFilter
-	portfolioCol        int
-	portfolioSort       int
-	currency            currencyDisplay
-	performance         performanceDisplay
-	perfPeriod          performancePeriod
-	dividendDisplay     dividendDisplay
-	commandMode         bool
-	pendingG            bool
-	searchEditing       bool
-	notice              string
-	refreshing          bool
-	enriching           bool
-	syncing             bool
-	liveLoaded          bool
-	dividendLoading     bool
-	dividendHoldingsKey string
-	allocation          app.AllocationReport
-	allocationScope     int
-	allocationEditing   bool
-	allocationAdding    bool
-	allocationPending   bool
-	allocationDirty     bool
-	allocationInput     string
-	rebalanceView bool
-	rebalanceEditing bool
-	rebalanceInput string
-	rebalanceBudget decimal.Decimal
-	alerts              app.AlertReport
-	alertDisplay        alertDisplay
-	alertAdding         bool
-	alertInput          string
-	scanner             app.ScannerReport
-	scannerLoading      bool
-	scannerAttempt      time.Time
-	information         app.InformationReport
-	informationTab      bool
-	informationInfo     bool
-	chartErr            error
-	informationCursor   int
-	informationLoading  bool
-	informationLive     bool
-	informationRequest  uint64
-	informationPendingG bool
-	feed                app.NewsFeedReport
-	feedWatchlist       bool
-	feedLoading         bool
-	feedUSOffset        int
-	feedUS              bool
-	feedInfo            bool
-	feedLive            bool
-	feedUnread          bool
-	feedKind            int
-	feedSymbol          int
-	feedOffset          int
-	feedWarningPage     int
-	feedRequest         uint64
-	feedCancel          context.CancelFunc
-	feedReadChanges     map[string]time.Time
-	feedReadPending     map[string]bool
+	service                *app.Service
+	mode                   string
+	screen                 screen
+	previous               screen
+	width, height          int
+	cursor                 int
+	loading                bool
+	err                    error
+	snapshot               app.Snapshot
+	history                []domain.PortfolioSnapshot
+	dividends              app.DividendReport
+	query                  string
+	results                []domain.Symbol
+	selected               domain.Symbol
+	candles                []domain.Candle
+	detailQuote            domain.Quote
+	intervalIndex          int
+	maVisible              [4]bool
+	refreshEvery           time.Duration
+	filter                 marketFilter
+	portfolioTab           marketFilter
+	portfolioCol           int
+	portfolioSort          int
+	currency               currencyDisplay
+	performance            performanceDisplay
+	perfPeriod             performancePeriod
+	dividendDisplay        dividendDisplay
+	commandMode            bool
+	pendingG               bool
+	searchEditing          bool
+	notice                 string
+	refreshing             bool
+	enriching              bool
+	syncing                bool
+	liveLoaded             bool
+	dividendLoading        bool
+	dividendHoldingsKey    string
+	allocation             app.AllocationReport
+	allocationScope        int
+	allocationEditing      bool
+	allocationAdding       bool
+	allocationPending      bool
+	allocationDirty        bool
+	allocationInput        string
+	rebalanceView          bool
+	rebalanceEditing       bool
+	rebalanceInput         string
+	rebalanceBudget        decimal.Decimal
+	alerts                 app.AlertReport
+	alertDisplay           alertDisplay
+	alertAdding            bool
+	alertInput             string
+	scanner                app.ScannerReport
+	scannerLoading         bool
+	scannerAttempt         time.Time
+	information            app.InformationReport
+	newsPreferences        domain.NewsPreferences
+	newsPreferencesEdited  bool
+	newsPreferencesPending bool
+	newsPreferencesLoading bool
+	newsKeywordEditing     bool
+	newsKeywordInput       string
+	informationTab         bool
+	informationInfo        bool
+	chartErr               error
+	informationCursor      int
+	informationLoading     bool
+	informationLive        bool
+	informationRequest     uint64
+	informationPendingG    bool
+	feed                   app.NewsFeedReport
+	feedWatchlist          bool
+	feedLoading            bool
+	feedUSOffset           int
+	feedUS                 bool
+	feedInfo               bool
+	feedLive               bool
+	feedUnread             bool
+	feedKind               int
+	feedSymbol             int
+	feedOffset             int
+	feedWarningPage        int
+	feedRequest            uint64
+	feedCancel             context.CancelFunc
+	feedReadChanges        map[string]time.Time
+	feedReadPending        map[string]bool
 }
 
 type cachedDashboardMsg struct {
@@ -220,11 +226,11 @@ func New(service *app.Service, mode string, refreshEvery time.Duration) Model {
 	if refreshEvery < time.Second {
 		refreshEvery = 5 * time.Second
 	}
-	return Model{service: service, mode: mode, loading: true, refreshing: true, width: 100, height: 30, intervalIndex: 5, refreshEvery: refreshEvery, portfolioTab: filterKR, maVisible: [4]bool{true, true, true, true}}
+	return Model{service: service, mode: mode, loading: true, refreshing: true, newsPreferencesLoading: true, width: 100, height: 30, intervalIndex: 5, refreshEvery: refreshEvery, portfolioTab: filterKR, maVisible: [4]bool{true, true, true, true}}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.cachedDashboardCmd(), m.dashboardCmd(), m.performanceCmd(), m.alertCmd(), m.tickCmd())
+	return tea.Batch(m.cachedDashboardCmd(), m.dashboardCmd(), m.performanceCmd(), m.alertCmd(), m.newsPreferencesCmd(), m.tickCmd())
 }
 
 func (m Model) cachedDashboardCmd() tea.Cmd {
@@ -536,7 +542,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !msg.cached {
 				m.informationLoading, m.informationLive = false, true
 			}
-			m.informationCursor = min(m.informationCursor, max(0, len(msg.report.Items)-1))
+			m.informationCursor = min(m.informationCursor, max(0, len(m.filteredInformation())-1))
 		}
 	case informationOpenedMsg:
 		if msg.err != nil {
@@ -595,6 +601,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.snapshot, m.enriching = msg.snapshot, false
 		m.notice = "최신 데이터"
 		return m, m.evaluateAlertsCmd(msg.snapshot)
+	case newsPreferencesMsg:
+		m.newsPreferencesLoading = false
+		if msg.err != nil {
+			m.notice = "뉴스 필터 설정을 불러오지 못했습니다"
+		} else if !m.newsPreferencesEdited {
+			m.newsPreferences = msg.preferences
+			m.informationCursor = min(m.informationCursor, max(0, len(m.filteredInformation())-1))
+			if m.screen == newsFeedScreen {
+				m.cursor = min(m.cursor, max(0, len(m.filteredFeed())-1))
+			}
+		}
+	case newsPreferencesSavedMsg:
+		m.newsPreferencesPending = false
+		if msg.err != nil {
+			m.notice = "뉴스 필터는 적용됐지만 설정 저장에 실패했습니다"
+		}
 	case performanceMsg:
 		if msg.err == nil {
 			m.history = msg.history
@@ -706,8 +728,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nextTick
 	case tea.PasteMsg:
 		text := domain.InformationText(msg.Content)
-		if m.screen == allocationScreen && m.rebalanceEditing && len(text) <= 20 && strings.Trim(text, "0123456789,") == "" {
-			m.rebalanceInput = boundedInput(m.rebalanceInput+text, 20)
+		switch {
+		case (m.screen == newsFeedScreen || (m.screen == detailScreen && m.informationTab)) && m.newsKeywordEditing:
+			m.newsKeywordInput = boundedInput(m.newsKeywordInput+text, 80)
+		case m.screen == allocationScreen && m.rebalanceEditing:
+			if len(text) <= 20 && strings.Trim(text, "0123456789,") == "" {
+				m.rebalanceInput = boundedInput(m.rebalanceInput+text, 20)
+			}
 		}
 		return m, nil
 	case tea.KeyPressMsg:
@@ -735,6 +762,11 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			m.feedCancel()
 		}
 		return m, tea.Quit
+	}
+	if !m.commandMode && (m.screen == newsFeedScreen || (m.screen == detailScreen && m.informationTab)) {
+		if next, cmd, handled := m.handleNewsQualityKey(key); handled {
+			return next, cmd
+		}
 	}
 	if !m.commandMode && m.screen == allocationScreen {
 		if next, cmd, handled := m.handleRebalanceKey(key); handled {
@@ -2801,11 +2833,14 @@ Tab 이력·목표가 규칙 전환    a 목표가 추가    d 규칙 삭제    
 통합 뉴스 (0)
 Tab 보유·관심 전환    f 뉴스·공시    s 종목    u 안 읽음
 Enter/o 원문    x 읽음 전환    i 상태    r/n 국내 조회    a 미국 조회
+p 전체→기본→엄격    v 반복형 제목 숨김    F 품질 필터 초기화    i 제외 근거
+z 제목 직접 언급    m 관련도 0/0.3/0.6    / 제목 검색    h 매체 숨김    H 매체 복원
 
 상세 차트
 h/l 또는 ←/→ 봉 단위 변경
 Tab 정보·차트 / 뉴스·공시 전환
 뉴스·공시: j/k 이동, Enter/o 원문, i 상태·관련도, r 국내 조회, a 미국 조회
+뉴스 필터는 통합 피드와 공유·저장 · 공시는 뉴스 전용 필터에서 제외
 
 콜론 명령
 :r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료
@@ -2842,14 +2877,14 @@ func (m Model) footer() string {
 	}
 	base := " ↑↓/jk 이동  Enter 상세  / 검색  : 명령  ? 도움말"
 	if m.screen == newsFeedScreen {
-		base = " Tab 범위 f/s/u 필터 x 읽음 Enter 원문 i 상태 r/n 국내 a 미국"
+		base = " Tab 범위 f/s/u 필터 p 품질 F 초기화 x 읽음 Enter 원문 i 상태 a 미국"
 		if m.width < 110 {
-			base = " Tab 범위 f/s/u 필터 x 읽음 Enter 원문 i 상태 a 미국"
+			base = " Tab 범위 p 품질 F 초기화 x 읽음 Enter 원문 i 상태 a 미국"
 		}
 	} else if m.screen == detailScreen {
 		base = " Tab 정보/뉴스  h/l 봉 단위  1~4 MA  Esc 뒤로"
 		if m.informationTab {
-			base = " Tab 차트 j/k 이동 Enter 원문 i 상태 r 국내 a 미국 Esc 뒤로"
+			base = " Tab 차트 p 품질 F 초기화 Enter 원문 i 상태 a 미국 Esc 뒤로"
 		}
 	} else if m.screen == performanceScreen {
 		base = " Tab 표/그래프  t 일/주/월/연  : 명령  ? 도움말"

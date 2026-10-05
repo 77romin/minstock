@@ -65,7 +65,8 @@ func (m Model) informationCmd(cached bool, us ...bool) tea.Cmd {
 }
 
 func (m Model) handleInformationKey(key string) (tea.Model, tea.Cmd, bool) {
-	count := len(m.information.Items)
+	items := m.filteredInformation()
+	count := len(items)
 	switch key {
 	case "i":
 		m.informationInfo = !m.informationInfo
@@ -89,7 +90,7 @@ func (m Model) handleInformationKey(key string) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	case "enter", "o":
 		if m.informationCursor < count {
-			return m, informationOpenCmd(m.information.Items[m.informationCursor].URL), true
+			return m, informationOpenCmd(items[m.informationCursor].URL), true
 		}
 	case "r":
 		next, cmd := m.loadInformation()
@@ -161,7 +162,15 @@ func (m Model) informationView() string {
 	if m.informationLoading {
 		lines = append(lines, "뉴스·공시를 조회하고 있습니다…")
 	}
-	items := m.information.Items
+	if hint := m.newsFilterSummary(); hint != "" {
+		lines = append(lines, trimDisplay(hint, contentWidth))
+	}
+	if m.informationInfo {
+		for _, line := range m.newsFilterDetails() {
+			lines = append(lines, trimDisplay(line, contentWidth))
+		}
+	}
+	items := m.filteredInformation()
 	var detail []string
 	if m.informationCursor >= 0 && m.informationCursor < len(items) {
 		detail = informationSelection(items[m.informationCursor], contentWidth, max(1, m.height-len(lines)-12), m.informationInfo)
@@ -175,11 +184,14 @@ func (m Model) informationView() string {
 	}
 	if len(items) == 0 && !m.informationLoading {
 		message := "최근 뉴스·공시가 없습니다."
+		if len(m.information.Items) > 0 {
+			message = "품질 필터로 모두 제외되었습니다 · F 초기화"
+		}
 		failed := len(m.information.Warnings) > 0
 		for _, source := range m.information.Sources {
 			failed = failed || source.Warning != ""
 		}
-		if failed {
+		if failed && len(m.information.Items) == 0 {
 			message = "설정 또는 조회 상태를 확인하세요."
 		}
 		lines = append(lines, message)
