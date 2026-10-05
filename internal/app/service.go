@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
@@ -15,16 +14,24 @@ import (
 )
 
 type Service struct {
-	repo        ports.Repository
-	providers   []ports.Provider
-	instruments []ports.InstrumentProvider
-	watchlists  []ports.WatchlistReader
-	fx          []ports.FXProvider
-	dividends   ports.DividendProvider
-	dividendMu  sync.Mutex
-	dividendRun map[string]*dividendCall
-	alertMu     sync.Mutex
-	alertFails  map[domain.BrokerID]int
+	repo            ports.Repository
+	providers       []ports.Provider
+	instruments     []ports.InstrumentProvider
+	watchlists      []ports.WatchlistReader
+	fx              []ports.FXProvider
+	dividends       ports.DividendProvider
+	dividendMu      sync.Mutex
+	dividendRun     map[string]*dividendCall
+	alertMu         sync.Mutex
+	alertFails      map[domain.BrokerID]int
+	scannerMu       sync.Mutex
+	scannerOptions  ScannerOptions
+	scannerLast     ScannerReport
+	scannerRetry    time.Time
+	scannerNow      func() time.Time
+	information     []ports.InformationProvider
+	informationMu   sync.Mutex
+	informationRuns map[string]*informationCall
 }
 
 type Snapshot struct {
@@ -43,7 +50,7 @@ type Snapshot struct {
 const dashboardCacheKey = "dashboard:v1"
 
 func New(repo ports.Repository, providers []ports.Provider, instruments []ports.InstrumentProvider, watchlists []ports.WatchlistReader, fx []ports.FXProvider) *Service {
-	return &Service{repo: repo, providers: providers, instruments: instruments, watchlists: watchlists, fx: fx}
+	return &Service{repo: repo, providers: providers, instruments: instruments, watchlists: watchlists, fx: fx, scannerOptions: DefaultScannerOptions(), scannerNow: time.Now}
 }
 
 func (s *Service) Sync(ctx context.Context) []error {
@@ -305,12 +312,7 @@ func (s *Service) EnrichDashboard(ctx context.Context, snap Snapshot) Snapshot {
 			continue
 		}
 		snap.Quotes[symbol.Key()] = q
-		report, ok := domain.ScoreSurge(q, decimal.NewFromFloat(2.8), decimal.NewFromFloat(3.2), domain.DefaultSurgePolicy())
-		if ok && symbol.Currency == domain.KRW {
-			snap.Surges = append(snap.Surges, report)
-		}
 	}
-	sort.Slice(snap.Surges, func(i, j int) bool { return snap.Surges[i].Score > snap.Surges[j].Score })
 	snap.LoadedAt = time.Now()
 	if err := s.saveDashboard(ctx, snap); err != nil {
 		snap.Warnings = append(snap.Warnings, err.Error())

@@ -209,6 +209,18 @@ type Quote struct {
 	SourceLabel string
 }
 
+type ScannerQuery struct {
+	Market     Market
+	ExcludeETF bool
+	Limit      int
+}
+
+type ScannerCandidates struct {
+	Quotes    []Quote
+	Warnings  []string
+	Truncated bool
+}
+
 type CandleInterval string
 
 const (

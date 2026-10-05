@@ -26,7 +26,11 @@ func Load(provider string) (Credentials, error) {
 	if provider == "nh" {
 		prefix = "NHPLUG"
 	}
-	appKey, secret := os.Getenv(prefix+"_APP_KEY"), os.Getenv(prefix+"_APP_SECRET")
+	keyName, secretName := prefix+"_APP_KEY", prefix+"_APP_SECRET"
+	if provider == "naver" {
+		keyName, secretName = "NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET"
+	}
+	appKey, secret := os.Getenv(keyName), os.Getenv(secretName)
 	if appKey != "" && secret != "" {
 		return Credentials{AppKey: appKey, Secret: secret, Source: "environment"}, nil
 	}
@@ -47,7 +51,7 @@ func Load(provider string) (Credentials, error) {
 
 func Save(provider, appKey, secret string) error {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	if provider != "kiwoom" && provider != "nh" {
+	if provider != "kiwoom" && provider != "nh" && provider != "naver" {
 		return fmt.Errorf("unsupported provider %q", provider)
 	}
 	if strings.TrimSpace(appKey) == "" || strings.TrimSpace(secret) == "" {

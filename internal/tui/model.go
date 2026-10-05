@@ -131,6 +131,16 @@ type Model struct {
 	alertDisplay        alertDisplay
 	alertAdding         bool
 	alertInput          string
+	scanner             app.ScannerReport
+	scannerLoading      bool
+	scannerAttempt      time.Time
+	information         app.InformationReport
+	informationTab      bool
+	informationCursor   int
+	informationLoading  bool
+	informationLive     bool
+	informationRequest  uint64
+	informationPendingG bool
 }
 
 type cachedDashboardMsg struct {
@@ -181,6 +191,7 @@ type quoteMsg struct {
 type syncMsg struct{ errs []error }
 type watchlistMsg struct{ err error }
 type refreshMsg time.Time
+type scannerMsg struct{ report app.ScannerReport }
 
 func New(service *app.Service, mode string, refreshEvery time.Duration) Model {
 	if refreshEvery < time.Second {
@@ -391,6 +402,26 @@ func (m Model) tickCmd() tea.Cmd {
 	return tea.Tick(m.refreshEvery, func(t time.Time) tea.Msg { return refreshMsg(t) })
 }
 
+func (m Model) scannerCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		return scannerMsg{report: m.service.ScanSurges(ctx)}
+	}
+}
+
+func (m Model) startScanner(cmd tea.Cmd) (tea.Model, tea.Cmd) {
+	interval := m.scanner.Options.RefreshInterval
+	if interval < time.Minute {
+		interval = time.Minute
+	}
+	if m.service != nil && m.screen == moversScreen && !m.scannerLoading && time.Since(m.scannerAttempt) >= interval {
+		m.scannerLoading, m.scannerAttempt = true, time.Now()
+		return m, tea.Batch(cmd, m.scannerCmd())
+	}
+	return m, cmd
+}
+
 func (m Model) searchCmd(query string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -422,6 +453,23 @@ func (m Model) quoteCmd(symbol domain.Symbol) tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case informationMsg:
+		if msg.symbol.Key() == m.selected.Key() && msg.request == m.informationRequest && (!msg.cached || !m.informationLive) {
+			m.information = msg.report
+			if !msg.cached {
+				m.informationLoading, m.informationLive = false, true
+			}
+			m.informationCursor = min(m.informationCursor, max(0, len(msg.report.Items)-1))
+		}
+	case informationOpenedMsg:
+		if msg.err != nil {
+			m.notice = "원문 열기 실패: " + msg.err.Error()
+		} else {
+			m.notice = "원문을 브라우저로 열었습니다"
+		}
+	case scannerMsg:
+		m.scanner, m.scannerLoading = msg.report, false
+		m.cursor = min(m.cursor, max(0, len(m.filteredSurges())-1))
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case cachedDashboardMsg:
@@ -567,6 +615,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case refreshMsg:
 		nextTick := m.tickCmd()
+		if m.screen == moversScreen {
+			return m.startScanner(nextTick)
+		}
 		if m.liveLoaded && time.Since(m.snapshot.LoadedAt) < m.refreshEvery {
 			return m, nextTick
 		}
@@ -577,7 +628,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nextTick
 	case tea.KeyPressMsg:
-		return m.handleKey(msg.String())
+		updated, cmd := m.handleKey(msg.String())
+		if next, ok := updated.(Model); ok {
+			return next.startScanner(cmd)
+		}
+		return updated, cmd
 	}
 	return m, nil
 }
@@ -651,6 +706,11 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	if m.screen == searchScreen {
 		return m.handleSearchKey(key)
 	}
+	if m.screen == detailScreen && m.informationTab {
+		if next, cmd, handled := m.handleInformationKey(key); handled {
+			return next, cmd
+		}
+	}
 	if m.pendingG {
 		m.pendingG = false
 		switch key {
@@ -670,6 +730,13 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.screen == detailScreen {
+		if key == "tab" || key == "shift+tab" {
+			m.informationTab = !m.informationTab
+			if m.informationTab {
+				return m.loadInformation()
+			}
+			return m, nil
+		}
 		if key >= "1" && key <= "4" {
 			index := int(key[0] - '1')
 			m.maVisible[index] = !m.maVisible[index]
@@ -881,8 +948,7 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if symbol, ok := m.currentSymbol(); ok {
-			m.previous, m.screen, m.selected, m.loading, m.detailQuote = m.screen, detailScreen, symbol, true, m.snapshot.Quotes[symbol.Key()]
-			return m, tea.Batch(m.candlesCmd(symbol), m.quoteCmd(symbol))
+			return m.openDetail(symbol, m.screen)
 		}
 	}
 	return m, nil
@@ -976,8 +1042,7 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 		case "enter":
 			if symbol, ok := m.currentSymbol(); ok {
-				m.previous, m.screen, m.selected, m.loading, m.detailQuote = searchScreen, detailScreen, symbol, true, m.snapshot.Quotes[symbol.Key()]
-				return m, tea.Batch(m.candlesCmd(symbol), m.quoteCmd(symbol))
+				return m.openDetail(symbol, searchScreen)
 			}
 		}
 		return m, nil
@@ -1103,8 +1168,8 @@ func (m Model) filteredResults() []domain.Symbol {
 }
 
 func (m Model) filteredSurges() []domain.SurgeReport {
-	result := make([]domain.SurgeReport, 0, len(m.snapshot.Surges))
-	for _, report := range m.snapshot.Surges {
+	result := make([]domain.SurgeReport, 0, len(m.scanner.Reports))
+	for _, report := range m.scanner.Reports {
 		if m.matchesFilter(report.Symbol) {
 			result = append(result, report)
 		}
@@ -1932,15 +1997,75 @@ func watchlistProviderName(item domain.WatchlistItem) string {
 
 func (m Model) moversView() string {
 	items := append([]domain.SurgeReport(nil), m.filteredSurges()...)
-	sort.Slice(items, func(i, j int) bool { return items[i].Score > items[j].Score })
-	lines := []string{"   종목                  점수      등락률       분석 근거"}
-	for i, r := range items {
-		line := fmt.Sprintf("%-2s %-18s %3d점 %9s%%  %s", cursor(i, m.cursor), trim(r.Symbol.Name, 16), r.Score, r.ChangeRate.StringFixed(2), strings.Join(r.Reasons, ", "))
+	options := m.scanner.Options
+	if options.RefreshInterval == 0 {
+		options = app.DefaultScannerOptions()
+	}
+	market := "KOSPI+KOSDAQ"
+	if options.Query.Market != "" {
+		market = string(options.Query.Market)
+	}
+	status := freshnessName(m.scanner.Freshness)
+	if m.scanner.Provider == domain.BrokerMock {
+		status = "데모 · 합성 데이터"
+	}
+	if m.scannerLoading {
+		status += " · 조회 중"
+	}
+	asOf := "미조회"
+	if !m.scanner.AsOf.IsZero() {
+		asOf = m.scanner.AsOf.In(time.FixedZone("KST", 9*60*60)).Format("01-02 15:04:05")
+	}
+	lines := []string{fmt.Sprintf("시장 급등 · %s · KRX · %s · %s", market, brokerDisplayName(m.scanner.Provider), status), fmt.Sprintf("기준 %s · 수집 %d / 분석 %d / 데이터 부족 %d", asOf, m.scanner.Candidates, m.scanner.Checked, m.scanner.Missing), fmt.Sprintf("조건 일간 ≥%s%% · 5분 ≥%s%% · 거래량 ≥%s배 · ≥%s억원", options.Policy.MinChangeRate, options.Policy.MinFiveMinuteRate, options.Policy.MinVolumeRatio, options.Policy.MinTurnover.Div(decimal.NewFromInt(100_000_000))), "", "   종목                  점수     당일      5분    거래량"}
+	overhead := 15
+	if m.cursor < len(items) && len(items[m.cursor].Warnings) > 0 {
+		overhead++
+	}
+	if m.scanner.Limited {
+		overhead++
+	}
+	if m.scanner.Error != "" {
+		overhead++
+	}
+	if len(m.scanner.Warnings) > 0 {
+		overhead++
+	}
+	visible := max(1, m.height-overhead)
+	start := max(0, m.cursor-visible+1)
+	end := min(len(items), start+visible)
+	for i := start; i < end; i++ {
+		r := items[i]
+		line := fmt.Sprintf("%s %s %3d점 %8s%% %7s%% %6s배", cursor(i, m.cursor), fitCell(r.Symbol.Name, 18, false), r.Score, r.ChangeRate.StringFixed(2), r.FiveMinuteRate.StringFixed(2), r.VolumeRatio.StringFixed(1))
 		lines = append(lines, selectLine(line, i == m.cursor))
 	}
 	if len(items) == 0 {
-		lines = append(lines, "  현재 기준을 통과한 급등 후보가 없습니다.")
+		message := "현재 기준을 통과한 급등 후보가 없습니다."
+		if m.scannerLoading {
+			message = "시장 순위와 최신 분봉을 조회하고 있습니다…"
+		} else if m.scanner.AsOf.IsZero() {
+			message = "시장 스캐너 조회 대기"
+		} else if m.scanner.Missing > 0 {
+			message = "후보 없음 · 데이터 부족 종목은 평가에서 제외했습니다."
+		}
+		lines = append(lines, "  "+message)
 	}
+	if m.cursor < len(items) {
+		r := items[m.cursor]
+		lines = append(lines, "", fmt.Sprintf("%s · %s · %s", r.Symbol.Code, brokerDisplayName(r.Provider), r.AsOf.In(time.FixedZone("KST", 9*60*60)).Format("15:04:05")), fmt.Sprintf("거래대금 %s억원 · 고점 거리 %s%% · 체결강도 %s", r.Turnover.Div(decimal.NewFromInt(100_000_000)).StringFixed(1), r.HighDistance.StringFixed(2), r.TradePower.StringFixed(1)))
+		if len(r.Warnings) > 0 {
+			lines = append(lines, strings.Join(r.Warnings, " · "))
+		}
+	}
+	if m.scanner.Limited {
+		lines = append(lines, "상위 후보 일부만 분석 · 조회 한도 적용")
+	}
+	if m.scanner.Error != "" {
+		lines = append(lines, negative.Render(trim(m.scanner.Error, max(40, m.width-10))))
+	}
+	if len(m.scanner.Warnings) > 0 {
+		lines = append(lines, "일부 조회 실패: "+trim(m.scanner.Warnings[0], max(40, m.width-24)))
+	}
+	lines = append(lines, muted.Render("거래량: 최근 완료 5분 / 직전 5분 · 장 마감/지연 분봉 제외"))
 	lines = append(lines, "", muted.Render("※ 규칙 기반 관찰 리포트이며 투자 권유가 아닙니다."))
 	return panel.Width(max(60, m.width-4)).Render(strings.Join(lines, "\n"))
 }
@@ -2448,6 +2573,9 @@ func alertSymbolLabel(symbol domain.Symbol) string {
 }
 
 func (m Model) detailView() string {
+	if m.informationTab {
+		return m.informationView()
+	}
 	interval := intervals[m.intervalIndex]
 	if m.loading {
 		return fmt.Sprintf("%s(%s) · %s\n\n차트 데이터를 불러오는 중…", m.selected.Name, m.selected.Code, interval.KoreanName())
@@ -2467,7 +2595,7 @@ func (m Model) detailView() string {
 	if m.selected.Exchange != "" {
 		exchange = " · " + m.selected.Exchange
 	}
-	header := fmt.Sprintf("%s (%s) · %s%s · %s  │  %s", m.selected.Name, m.selected.Code, m.selected.Market, exchange, interval.KoreanName(), legend)
+	header := fmt.Sprintf("%s (%s) · %s%s · %s  │  %s", m.selected.Name, m.selected.Code, m.selected.Market, exchange, interval.KoreanName(), legend) + "\n[정보·차트]  뉴스·공시 (Tab)"
 	chartHeight := max(8, m.height/2-4)
 	cellWidth := max(28, m.width/2-4)
 	chartWidth := max(60, m.width-4)
@@ -2535,6 +2663,8 @@ Tab 이력·목표가 규칙 전환    a 목표가 추가    d 규칙 삭제    
 
 상세 차트
 h/l 또는 ←/→ 봉 단위 변경
+Tab 정보·차트 / 뉴스·공시 전환
+뉴스·공시: j/k 이동, Enter/o 원문 브라우저 열기, r 다시 조회
 
 콜론 명령
 :r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료
@@ -2570,7 +2700,12 @@ func (m Model) footer() string {
 		return brand.Render(" COMMAND :")
 	}
 	base := " ↑↓/jk 이동  Enter 상세  / 검색  : 명령  ? 도움말"
-	if m.screen == performanceScreen {
+	if m.screen == detailScreen {
+		base = " Tab 정보/뉴스  h/l 봉 단위  1~4 MA  Esc 뒤로"
+		if m.informationTab {
+			base = " Tab 차트  j/k 이동  Enter/o 원문  r 조회  Esc 뒤로"
+		}
+	} else if m.screen == performanceScreen {
 		base = " Tab 표/그래프  t 일/주/월/연  : 명령  ? 도움말"
 	} else if m.screen == dividendScreen {
 		base = " Tab 종목별/월별  : 명령  ? 도움말"

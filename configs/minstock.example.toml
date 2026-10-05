@@ -20,8 +20,20 @@ auth_url = "https://api.nhplug.com:8443"
 provider = "alphavantage"
 base_url = "https://www.alphavantage.co/query"
 
+[news]
+naver_base_url = "https://naverapihub.apigw.ntruss.com/search/v1/news"
+dart_base_url = "https://opendart.fss.or.kr/api"
+# Keys: minstock setup naver / dart; US news reuses setup dividend.
+# NAVER credentials must be issued by NAVER API HUB (not the old developer center).
+# Env: NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, DART_API_KEY, ALPHAVANTAGE_API_KEY.
+
 [scanner]
+market = "all" # all | kospi | kosdaq; KRX regular session
+exclude_etf = true # ETF/ETN exclusion in ranking APIs
+max_candidates = 20 # maximum detail requests per scan (1..50)
+refresh_interval = "60s" # independent from account refresh; minimum 60s
 min_change_rate = "5"
 min_five_minute_rate = "2"
 min_volume_ratio = "2"
+# Recent complete 5-minute volume / previous complete 5-minute volume.
 min_turnover_krw = 3000000000

@@ -110,7 +110,7 @@ func run(args []string) error {
 	remaining := flags.Args()
 	if len(remaining) > 0 && remaining[0] == "setup" {
 		if len(remaining) != 2 {
-			return errors.New("사용법: minstock setup <kiwoom|nh|dividend>")
+			return errors.New("사용법: minstock setup <kiwoom|nh|dividend|naver|dart>")
 		}
 		return setup(remaining[1])
 	}
@@ -154,6 +154,19 @@ func run(args []string) error {
 
 func setup(provider string) error {
 	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "dart" {
+		fmt.Print("DART API Key (입력 숨김): ")
+		value, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+		if err != nil {
+			return err
+		}
+		if err := security.SaveAPIKey("dart", string(value)); err != nil {
+			return err
+		}
+		fmt.Println("DART 공시 API 키를 OS 보안 키링에 저장하고 재확인했습니다.")
+		return nil
+	}
 	if provider == "dividend" || provider == "alphavantage" {
 		fmt.Print("Alpha Vantage API Key (입력 숨김): ")
 		apiKey, err := term.ReadPassword(int(os.Stdin.Fd()))
@@ -168,16 +181,21 @@ func setup(provider string) error {
 		fmt.Println("확인: minstock --diagnose")
 		return nil
 	}
-	if provider != "kiwoom" && provider != "nh" {
+	if provider != "kiwoom" && provider != "nh" && provider != "naver" {
 		return fmt.Errorf("지원하지 않는 증권사 %q", provider)
 	}
-	fmt.Printf("%s App Key (입력 숨김): ", strings.ToUpper(provider))
+	keyLabel, secretLabel := "App Key", "App Secret"
+	if provider == "naver" {
+		keyLabel, secretLabel = "Client ID", "Client Secret"
+		fmt.Println("NAVER API HUB의 Application > 인증 정보에서 발급된 키를 입력하세요.")
+	}
+	fmt.Printf("%s %s (입력 숨김): ", strings.ToUpper(provider), keyLabel)
 	appKey, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println()
 	if err != nil {
 		return err
 	}
-	fmt.Print("App Secret (입력 숨김): ")
+	fmt.Printf("%s (입력 숨김): ", secretLabel)
 	secret, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println()
 	if err != nil {
@@ -216,6 +234,16 @@ func printDiagnosis(cfg config.Config) error {
 		dividendState = "미설정 (" + err.Error() + ")"
 	}
 	fmt.Printf("%-7s: %-24s provider=%s endpoint=%s\n", "배당", dividendState, cfg.Dividends.Provider, cfg.Dividends.BaseURL)
+	naverState := "미설정 · minstock setup naver"
+	if credentials, err := security.Load("naver"); err == nil {
+		naverState = "설정됨 (" + credentials.Source + ")"
+	}
+	dartState := "미설정 · minstock setup dart"
+	if _, source, err := security.LoadAPIKey("dart", "DART_API_KEY"); err == nil {
+		dartState = "설정됨 (" + source + ")"
+	}
+	fmt.Printf("NAVER API HUB: %s endpoint=%s\n", naverState, cfg.News.NaverBaseURL)
+	fmt.Printf("DART  : %s endpoint=%s\n", dartState, cfg.News.DARTBaseURL)
 	return nil
 }
 
@@ -226,7 +254,7 @@ Usage:
   minstock                         Start the TUI
   minstock sync                    Sync instrument and watchlist data
   minstock --sync, -sy             Same as "minstock sync"
-  minstock setup <kiwoom|nh|dividend> Store API credentials in the OS keychain
+  minstock setup <kiwoom|nh|dividend|naver|dart> Store API credentials in the OS keychain
   minstock --setup, -s --kiwoom    Store Kiwoom credentials
   minstock --setup, -s --nh        Store NH credentials
   minstock --setup, -s --dividend  Store Alpha Vantage API key

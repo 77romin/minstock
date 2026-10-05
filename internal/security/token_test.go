@@ -39,3 +39,30 @@ func TestAPIKeyKeyringRoundTrip(t *testing.T) {
 		t.Fatalf("value=%q source=%q err=%v", value, source, err)
 	}
 }
+
+func TestNewsCredentialsKeyringAndEnvironment(t *testing.T) {
+	keyring.MockInit()
+	t.Setenv("NAVER_CLIENT_ID", "")
+	t.Setenv("NAVER_CLIENT_SECRET", "")
+	t.Setenv("DART_API_KEY", "")
+	if err := Save("naver", "news-id", "news-secret"); err != nil {
+		t.Fatal(err)
+	}
+	creds, err := Load("naver")
+	if err != nil || creds.AppKey != "news-id" || creds.Secret != "news-secret" || creds.Source != "os-keyring" {
+		t.Fatal("NAVER keyring round trip failed")
+	}
+	t.Setenv("NAVER_CLIENT_ID", "env-id")
+	t.Setenv("NAVER_CLIENT_SECRET", "env-secret")
+	creds, err = Load("naver")
+	if err != nil || creds.AppKey != "env-id" || creds.Secret != "env-secret" || creds.Source != "environment" {
+		t.Fatal("NAVER environment priority failed")
+	}
+	if err := SaveAPIKey("dart", "dart-key"); err != nil {
+		t.Fatal(err)
+	}
+	value, source, err := LoadAPIKey("dart", "DART_API_KEY")
+	if err != nil || value != "dart-key" || source != "os-keyring" {
+		t.Fatal("DART keyring round trip failed")
+	}
+}

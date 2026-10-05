@@ -29,6 +29,10 @@ const (
 // This allowlist is an intentional safety boundary. The v0.1 program may call
 // only documented read APIs; order, amendment, and cancellation IDs are absent.
 var readOnlyAPIs = map[string]string{
+	"ka10003":  "/api/dostk/stkinfo",
+	"ka10023":  "/api/dostk/rkinfo",
+	"ka10027":  "/api/dostk/rkinfo",
+	"ka10032":  "/api/dostk/rkinfo",
 	"kt00018":  "/api/dostk/acnt",
 	"ka10001":  "/api/dostk/stkinfo",
 	"ka10099":  "/api/dostk/stkinfo",

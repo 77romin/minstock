@@ -25,6 +25,19 @@ type MarketDataProvider interface {
 	Candles(context.Context, domain.CandleQuery) ([]domain.Candle, error)
 }
 
+// MarketScanner supplies a bounded union of market-wide ranking lists.
+type MarketScanner interface {
+	MarketDataProvider
+	ID() domain.BrokerID
+	SurgeCandidates(context.Context, domain.ScannerQuery) (domain.ScannerCandidates, error)
+}
+
+// ScannerQuoteReader enriches scanner-only quotes without adding requests to
+// routine portfolio polling.
+type ScannerQuoteReader interface {
+	SurgeQuote(context.Context, domain.Symbol) (domain.Quote, error)
+}
+
 type InstrumentProvider interface {
 	Instruments(context.Context) ([]domain.Symbol, error)
 }
@@ -48,6 +61,17 @@ type Provider interface {
 type DividendProvider interface {
 	Dividends(context.Context, string) ([]domain.DividendEvent, error)
 	DividendSource() string
+}
+
+type InformationProvider interface {
+	Information(context.Context, domain.Symbol) ([]domain.InformationItem, error)
+	InformationSource() string
+	SupportsInformation(domain.Symbol) bool
+}
+
+type CacheRepository interface {
+	SaveCache(context.Context, string, []byte) error
+	LoadCache(context.Context, string) ([]byte, time.Time, error)
 }
 
 type Repository interface {

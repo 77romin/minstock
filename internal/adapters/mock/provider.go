@@ -16,7 +16,16 @@ type Provider struct{}
 func New() *Provider                    { return &Provider{} }
 func (p *Provider) ID() domain.BrokerID { return domain.BrokerMock }
 
-func (p *Provider) DividendSource() string { return "demo" }
+func (p *Provider) DividendSource() string               { return "demo" }
+func (*Provider) InformationSource() string              { return "demo" }
+func (*Provider) SupportsInformation(domain.Symbol) bool { return true }
+func (*Provider) Information(_ context.Context, symbol domain.Symbol) ([]domain.InformationItem, error) {
+	items := []domain.InformationItem{{Kind: domain.InformationNews, Title: symbol.Name + " 실적 전망 (데모 예시)", URL: "https://example.com/news/" + symbol.Code, Source: "demo", PublishedAt: time.Now().Add(-time.Hour), Relevance: "합성 샘플"}}
+	if symbol.Currency == domain.KRW {
+		items = append(items, domain.InformationItem{Kind: domain.InformationDisclosure, Title: "분기보고서 (데모 예시)", URL: "https://example.com/disclosure/" + symbol.Code, Source: "demo", PublishedAt: time.Now().AddDate(0, 0, -1), DateOnly: true})
+	}
+	return items, nil
+}
 
 func (p *Provider) Dividends(_ context.Context, symbol string) ([]domain.DividendEvent, error) {
 	now := time.Now()
@@ -53,6 +62,21 @@ var symbols = []domain.Symbol{
 
 func (p *Provider) Instruments(context.Context) ([]domain.Symbol, error) {
 	return append([]domain.Symbol(nil), symbols...), nil
+}
+
+func (p *Provider) SurgeCandidates(ctx context.Context, query domain.ScannerQuery) (domain.ScannerCandidates, error) {
+	result := domain.ScannerCandidates{}
+	for _, symbol := range symbols {
+		if symbol.Currency != domain.KRW || (query.Market != "" && symbol.Market != query.Market) {
+			continue
+		}
+		q, err := p.Quote(ctx, symbol)
+		if err != nil {
+			return result, err
+		}
+		result.Quotes = append(result.Quotes, q)
+	}
+	return result, nil
 }
 func (p *Provider) Accounts(context.Context) ([]domain.Account, error) {
 	return []domain.Account{{ID: "mock-nh", Name: "NH 샘플", Broker: p.ID(), Currency: domain.KRW}, {ID: "mock-kiwoom", Name: "키움 국내 샘플", Broker: p.ID(), Currency: domain.KRW}, {ID: "mock-us", Name: "키움 미국 샘플", Broker: p.ID(), Currency: domain.USD}}, nil
@@ -126,6 +150,23 @@ func (p *Provider) Quote(_ context.Context, s domain.Symbol) (domain.Quote, erro
 }
 
 func (p *Provider) Candles(_ context.Context, q domain.CandleQuery) ([]domain.Candle, error) {
+	if q.Interval == domain.Interval1Min && q.Limit == 30 {
+		loc := time.FixedZone("KST", 9*60*60)
+		day := time.Now().In(loc)
+		end := time.Date(day.Year(), day.Month(), day.Day(), 13, 0, 0, 0, loc)
+		price := decimal.NewFromFloat(basePrice(q.Symbol.Code))
+		var result []domain.Candle
+		for i := 0; i < 11; i++ {
+			start := end.Add(time.Duration(i-11) * time.Minute)
+			close := price.Mul(decimal.NewFromFloat(.94 + float64(i)*.006))
+			volume := int64(1000)
+			if i > 5 {
+				volume = 3000
+			}
+			result = append(result, domain.Candle{Symbol: q.Symbol, Interval: domain.Interval1Min, OpenTime: start, CloseTime: start.Add(time.Minute), Open: close, High: close, Low: close, Close: close, Volume: volume, Complete: true, Provider: p.ID()})
+		}
+		return result, nil
+	}
 	count := q.Limit
 	if count <= 0 {
 		count = 140

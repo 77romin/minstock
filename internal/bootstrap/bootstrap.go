@@ -5,14 +5,18 @@ import (
 	"fmt"
 
 	"github.com/77romin/minstock-tui/internal/adapters/alphavantage"
+	"github.com/77romin/minstock-tui/internal/adapters/dart"
 	"github.com/77romin/minstock-tui/internal/adapters/kiwoom"
 	"github.com/77romin/minstock-tui/internal/adapters/mock"
+	"github.com/77romin/minstock-tui/internal/adapters/naver"
 	"github.com/77romin/minstock-tui/internal/adapters/nh"
 	db "github.com/77romin/minstock-tui/internal/adapters/sqlite"
 	"github.com/77romin/minstock-tui/internal/app"
 	"github.com/77romin/minstock-tui/internal/config"
+	"github.com/77romin/minstock-tui/internal/domain"
 	"github.com/77romin/minstock-tui/internal/ports"
 	"github.com/77romin/minstock-tui/internal/security"
+	"github.com/shopspring/decimal"
 )
 
 type Runtime struct {
@@ -22,6 +26,9 @@ type Runtime struct {
 }
 
 func Build(ctx context.Context, cfg config.Config) (*Runtime, error) {
+	if err := cfg.Scanner.Validate(); err != nil {
+		return nil, err
+	}
 	repo, err := db.Open(cfg.DBPath())
 	if err != nil {
 		return nil, err
@@ -36,6 +43,7 @@ func Build(ctx context.Context, cfg config.Config) (*Runtime, error) {
 	var watchlists []ports.WatchlistReader
 	var fx []ports.FXProvider
 	var dividendProvider ports.DividendProvider
+	var information []ports.InformationProvider
 
 	if cfg.Kiwoom.Enabled || security.Configured("kiwoom") {
 		creds, loadErr := security.Load("kiwoom")
@@ -76,6 +84,7 @@ func Build(ctx context.Context, cfg config.Config) (*Runtime, error) {
 		watchlists = append(watchlists, demo)
 		fx = append(fx, demo)
 		dividendProvider = demo
+		information = append(information, demo)
 		mode = "demo"
 	}
 	if apiKey, _, keyErr := security.LoadAPIKey("alphavantage", "ALPHAVANTAGE_API_KEY"); keyErr == nil {
@@ -85,9 +94,37 @@ func Build(ctx context.Context, cfg config.Config) (*Runtime, error) {
 			return nil, clientErr
 		}
 		dividendProvider = client
+		if mode != "demo" {
+			information = append(information, client)
+		}
+	}
+	if mode != "demo" {
+		if credentials, err := security.Load("naver"); err == nil {
+			client, err := naver.New(cfg.News.NaverBaseURL, credentials)
+			if err != nil {
+				repo.Close()
+				return nil, err
+			}
+			information = append(information, client)
+		}
+		if key, _, err := security.LoadAPIKey("dart", "DART_API_KEY"); err == nil {
+			client, err := dart.New(cfg.News.DARTBaseURL, key, repo)
+			if err != nil {
+				repo.Close()
+				return nil, err
+			}
+			information = append(information, client)
+		}
 	}
 	service := app.New(repo, providers, instruments, watchlists, fx)
 	service.SetDividendProvider(dividendProvider)
+	service.SetInformationProviders(information)
+	options := app.DefaultScannerOptions()
+	options.Query.Market = map[string]domain.Market{"kospi": domain.MarketKOSPI, "kosdaq": domain.MarketKOSDAQ}[cfg.Scanner.Market]
+	options.Query.ExcludeETF, options.Query.Limit = cfg.Scanner.ExcludeETF, cfg.Scanner.MaxCandidates
+	options.RefreshInterval = cfg.Scanner.RefreshInterval
+	options.Policy = domain.SurgePolicy{MinChangeRate: decimal.RequireFromString(cfg.Scanner.MinChangeRate), MinFiveMinuteRate: decimal.RequireFromString(cfg.Scanner.MinFiveMinuteRate), MinVolumeRatio: decimal.RequireFromString(cfg.Scanner.MinVolumeRatio), MinTurnover: decimal.NewFromInt(cfg.Scanner.MinTurnoverKRW)}
+	service.SetScannerOptions(options)
 
 	return &Runtime{
 		Service: service,
