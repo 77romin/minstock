@@ -269,7 +269,11 @@ func (c *Client) Balances(ctx context.Context, accountID string) ([]domain.Balan
 	if err != nil {
 		// Preserve the usable domestic balance. Positions performs its own
 		// foreign error reporting and may still return domestic holdings.
+		result[0].Freshness = domain.FreshMixed
 		return result, nil
+	}
+	if foreign.Freshness != domain.FreshLive {
+		result[0].Freshness = domain.FreshMixed
 	}
 	if !foreign.ValueTotal.IsZero() || !foreign.Cash.IsZero() || !foreign.PurchaseTotal.IsZero() {
 		result = append(result, foreign)

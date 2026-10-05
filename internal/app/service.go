@@ -142,11 +142,18 @@ func (s *Service) DashboardCore(ctx context.Context) Snapshot {
 	snap := Snapshot{Quotes: map[string]domain.Quote{}, LoadedAt: time.Now()}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	complete := map[domain.BrokerID]bool{}
 	for _, provider := range s.providers {
 		provider := provider
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			ok := false
+			defer func() {
+				mu.Lock()
+				complete[provider.ID()] = ok
+				mu.Unlock()
+			}()
 			status := provider.Status(ctx)
 			mu.Lock()
 			snap.Statuses = append(snap.Statuses, status)
@@ -161,6 +168,7 @@ func (s *Service) DashboardCore(ctx context.Context) Snapshot {
 				mu.Unlock()
 				return
 			}
+			ok = len(accounts) > 0
 			for _, account := range accounts {
 				var balances []domain.Balance
 				if source, ok := provider.(ports.BalanceListReader); ok {
@@ -173,10 +181,19 @@ func (s *Service) DashboardCore(ctx context.Context) Snapshot {
 					}
 				}
 				if err == nil {
+					if len(balances) == 0 {
+						ok = false
+					}
+					for _, balance := range balances {
+						if provider.ID() != domain.BrokerMock && (balance.Broker != provider.ID() || balance.Freshness != domain.FreshLive) {
+							ok = false
+						}
+					}
 					mu.Lock()
 					snap.Balances = append(snap.Balances, balances...)
 					mu.Unlock()
 				} else {
+					ok = false
 					mu.Lock()
 					snap.Warnings = append(snap.Warnings, err.Error())
 					mu.Unlock()
@@ -187,6 +204,7 @@ func (s *Service) DashboardCore(ctx context.Context) Snapshot {
 					snap.Positions = append(snap.Positions, positions...)
 					mu.Unlock()
 				} else {
+					ok = false
 					mu.Lock()
 					snap.Warnings = append(snap.Warnings, err.Error())
 					mu.Unlock()
@@ -226,7 +244,9 @@ func (s *Service) DashboardCore(ctx context.Context) Snapshot {
 			}
 		}
 	}
-	if snapshots := portfolioSnapshots(snap.Balances, snap.FX, snap.LoadedAt); len(snapshots) > 0 {
+	if !portfolioRecordingReady(snap, complete) {
+		snap.Warnings = append(snap.Warnings, "성과 기록 보류: NH·키움의 정상 잔고가 모두 필요합니다 (부분 조회·캐시 제외)")
+	} else if snapshots := portfolioSnapshots(snap.Balances, snap.FX, snap.LoadedAt); len(snapshots) > 0 {
 		if err := s.repo.SavePortfolioSnapshots(ctx, snapshots); err != nil {
 			snap.Warnings = append(snap.Warnings, err.Error())
 		}
@@ -325,7 +345,11 @@ func (s *Service) Dashboard(ctx context.Context) Snapshot {
 }
 
 func (s *Service) PortfolioHistory(ctx context.Context, from, to time.Time) ([]domain.PortfolioSnapshot, error) {
-	return s.repo.ListPortfolioSnapshots(ctx, from, to)
+	history, err := s.repo.ListPortfolioSnapshots(ctx, from, to)
+	if err != nil {
+		return nil, err
+	}
+	return completePortfolioHistory(history), nil
 }
 
 func (s *Service) Quote(ctx context.Context, symbol domain.Symbol) (domain.Quote, error) {

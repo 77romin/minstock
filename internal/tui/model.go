@@ -2205,10 +2205,22 @@ func (m Model) performanceView() string {
 	return m.performanceTableView()
 }
 
+func (m Model) performanceStatus() string {
+	for _, warning := range m.snapshot.Warnings {
+		if strings.HasPrefix(warning, "성과 기록 보류:") {
+			return trim(warning, max(52, m.width-8))
+		}
+	}
+	if m.mode == "demo" {
+		return "데모 기록 · 실제 계좌와 분리된 예시 데이터"
+	}
+	return "NH·키움 정상 잔고 동시 조회분만 기록·비교합니다."
+}
+
 func (m Model) performanceTableView() string {
 	points := m.performancePoints()
 	if len(points) == 0 {
-		return panel.Width(max(60, m.width-4)).Render("포트폴리오 성과\n\n  아직 저장된 일별 스냅샷이 없습니다.\n  계좌 조회가 완료되면 오늘 기록부터 자동으로 저장됩니다.")
+		return panel.Width(max(60, m.width-4)).Render("포트폴리오 성과\n\n  비교 가능한 일별 기록이 없습니다.\n  NH·키움 잔고가 모두 정상 조회되면 기록됩니다.\n  " + m.performanceStatus())
 	}
 	latest := points[len(points)-1]
 	change, changeRate := decimal.Zero, decimal.Zero
@@ -2224,7 +2236,7 @@ func (m Model) performanceTableView() string {
 	}
 	lines := []string{
 		fmt.Sprintf("포트폴리오 성과 · 원화 기준 · %d일 기록", len(points)), "",
-		selected.Render(" 표 ") + "  " + muted.Render(" 그래프 ") + "    " + muted.Render("Tab: 보기 전환"), "",
+		selected.Render(" 표 ") + "  " + muted.Render(" 그래프 ") + "    " + muted.Render("Tab: 보기 전환"), muted.Render(m.performanceStatus()),
 		fmt.Sprintf("  총자산       %s원", money(latest.TotalAssets)),
 		fmt.Sprintf("  평가손익     %s", directionalValueStyle(latest.ProfitLoss).Render(signedMoney(latest.ProfitLoss)+"원")),
 		fmt.Sprintf("  전 기록 대비 %s", comparison), "",
@@ -2297,7 +2309,7 @@ func aggregatePerformancePeriod(points []performancePoint, period performancePer
 func (m Model) performanceChartView() string {
 	allPoints := m.performancePoints()
 	if len(allPoints) == 0 {
-		return panel.Width(max(60, m.width-4)).Render("포트폴리오 성과\n\n  아직 저장된 일별 스냅샷이 없습니다.\n  계좌 조회가 완료되면 오늘 기록부터 자동으로 저장됩니다.")
+		return panel.Width(max(60, m.width-4)).Render("포트폴리오 성과\n\n  비교 가능한 일별 기록이 없습니다.\n  NH·키움 잔고가 모두 정상 조회되면 기록됩니다.\n  " + m.performanceStatus())
 	}
 	points := aggregatePerformancePeriod(allPoints, m.perfPeriod)
 	first, latest := points[0], points[len(points)-1]
@@ -2323,7 +2335,7 @@ func (m Model) performanceChartView() string {
 	chartHeight := max(10, m.height-14)
 	lines := []string{
 		fmt.Sprintf("포트폴리오 성과 · 원화 기준 · %d일 기록", len(allPoints)),
-		muted.Render(" 표 ") + "  " + selected.Render(" 그래프 ") + "    " + strings.Join(periodTabs, " "), "",
+		muted.Render(" 표 ") + "  " + selected.Render(" 그래프 ") + "    " + strings.Join(periodTabs, " "), muted.Render(m.performanceStatus()),
 		fmt.Sprintf("  총자산       %s원", money(latest.TotalAssets)),
 		fmt.Sprintf("  평가손익     %s", directionalValueStyle(latest.ProfitLoss).Render(signedMoney(latest.ProfitLoss)+"원")),
 		fmt.Sprintf("  기간 증감    %s", changeText), "",

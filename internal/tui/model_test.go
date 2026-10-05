@@ -564,6 +564,16 @@ func TestPerformanceViewExplainsSingleDayHistory(t *testing.T) {
 	}
 }
 
+func TestPerformanceViewExplainsRecordingPause(t *testing.T) {
+	m := Model{width: 100, height: 24, snapshot: app.Snapshot{Warnings: []string{"성과 기록 보류: NH·키움의 정상 잔고가 모두 필요합니다 (부분 조회·캐시 제외)"}}}
+	for _, display := range []performanceDisplay{performanceTable, performanceChart} {
+		m.performance = display
+		if view := m.performanceView(); !strings.Contains(view, "성과 기록 보류") || !strings.Contains(view, "모두 정상 조회") {
+			t.Fatalf("missing recording policy: %s", view)
+		}
+	}
+}
+
 func TestPerformanceViewColorsValuesByDirection(t *testing.T) {
 	loc := time.FixedZone("KST", 9*60*60)
 	day1 := time.Date(2026, 9, 27, 0, 0, 0, 0, loc)

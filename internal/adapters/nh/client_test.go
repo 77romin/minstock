@@ -144,4 +144,14 @@ func TestBalanceAndPositionsUseCurrentContractAndShareResponse(t *testing.T) {
 	if foreignBalanceCalls.Load() != 2 {
 		t.Fatalf("foreign refresh calls=%d; want 2", foreignBalanceCalls.Load())
 	}
+	// Without a foreign cache, preserve the domestic display but explicitly mark
+	// the missing overseas ledger so performance recording can reject it.
+	uncached, err := New(server.URL, server.URL, security.Credentials{AppKey: "key", Secret: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partial, err := uncached.Balances(t.Context(), "1234567890")
+	if err != nil || len(partial) != 1 || partial[0].Freshness != domain.FreshMixed {
+		t.Fatalf("missing foreign ledger not marked partial: %#v err=%v", partial, err)
+	}
 }
