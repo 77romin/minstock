@@ -128,6 +128,10 @@ type Model struct {
 	allocationPending   bool
 	allocationDirty     bool
 	allocationInput     string
+	rebalanceView bool
+	rebalanceEditing bool
+	rebalanceInput string
+	rebalanceBudget decimal.Decimal
 	alerts              app.AlertReport
 	alertDisplay        alertDisplay
 	alertAdding         bool
@@ -700,6 +704,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.dashboardCmd(), nextTick)
 		}
 		return m, nextTick
+	case tea.PasteMsg:
+		text := domain.InformationText(msg.Content)
+		if m.screen == allocationScreen && m.rebalanceEditing && len(text) <= 20 && strings.Trim(text, "0123456789,") == "" {
+			m.rebalanceInput = boundedInput(m.rebalanceInput+text, 20)
+		}
+		return m, nil
 	case tea.KeyPressMsg:
 		updated, cmd := m.handleKey(msg.String())
 		if next, ok := updated.(Model); ok {
@@ -725,6 +735,11 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			m.feedCancel()
 		}
 		return m, tea.Quit
+	}
+	if !m.commandMode && m.screen == allocationScreen {
+		if next, cmd, handled := m.handleRebalanceKey(key); handled {
+			return next, cmd
+		}
 	}
 	if m.screen == allocationScreen && (m.allocationEditing || m.allocationAdding) {
 		return m.handleAllocationInput(key)
@@ -2533,6 +2548,9 @@ func (m Model) handleAllocationInput(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) allocationView() string {
+	if m.rebalanceView || m.rebalanceEditing {
+		return m.rebalancePlanView()
+	}
 	targetTotal := decimal.Zero
 	for _, row := range m.allocation.Rows {
 		targetTotal = targetTotal.Add(row.Target.TargetPercent)
@@ -2775,6 +2793,7 @@ Tab 종목별·월별 화면 전환
 
 목표 비중
 Tab 통합·NH·키움 전환    Enter/e 편집    a 종목 추가    r 현재비중 복사    s 저장    u 되돌리기
+b 추가 투자금 입력    v 부족/초과 금액과 추가금 배분 계산(주문 없음)
 
 알림
 Tab 이력·목표가 규칙 전환    a 목표가 추가    d 규칙 삭제    x/X 확인/모두 확인
@@ -2837,7 +2856,7 @@ func (m Model) footer() string {
 	} else if m.screen == dividendScreen {
 		base = " Tab 종목별/월별  : 명령  ? 도움말"
 	} else if m.screen == allocationScreen {
-		base = " Tab 범위  Enter/e 편집  a 추가  r 복사  s 저장  u 취소  ? 도움말"
+		base = " Tab 범위 Enter 편집 a 추가 s 저장 b 투자금 v 계산 u 취소"
 	} else if m.screen == alertScreen {
 		if m.alertDisplay == alertRules {
 			base = " Tab 이력/규칙  a 목표가 추가  d 삭제  ? 도움말"
