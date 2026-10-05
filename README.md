@@ -192,14 +192,15 @@ TUI 안에서 대부분의 작업을 하므로 옵션은 운영에 필요한 최
 | 명령 | 설명 |
 |---|---|
 | `minstock` | TUI 실행 |
-| `minstock sync` | 종목 인덱스와 지원되는 증권사 관심종목 동기화 |
-| `minstock --sync`, `minstock -sy` | `sync`와 동일 |
+| `minstock --sync`, `minstock -sy` | 종목 인덱스와 지원되는 증권사 관심종목 동기화 |
 | `minstock setup kiwoom` | 키움 App Key/Secret을 OS 키링에 저장 |
 | `minstock setup nh` | NH App Key/Secret을 OS 키링에 저장 |
 | `minstock setup naver` | 국내 뉴스 Client ID/Secret을 OS 키링에 저장 |
 | `minstock setup dart` | 국내 공시 API 키를 OS 키링에 저장 |
 | `minstock --setup --kiwoom`, `minstock -s --kiwoom` | 키움 키체인 등록 |
 | `minstock --setup --nh`, `minstock -s --nh` | NH 키체인 등록 |
+| `minstock --setup --naver`, `minstock -s --naver` | NAVER API HUB Client ID/Secret 키체인 등록 |
+| `minstock --setup --dart`, `minstock -s --dart` | DART 공시 API 키체인 등록 |
 | `minstock --diagnose` | 설정 경로, DB 경로, 자격증명 준비 상태 확인 |
 | `minstock -d` | `--diagnose`와 동일 |
 | `minstock --version` | 버전 출력 |
@@ -397,7 +398,7 @@ minstock setup kiwoom
 minstock setup nh
 minstock setup dividend
 minstock --diagnose
-minstock sync
+minstock --sync
 minstock
 ```
 
@@ -513,7 +514,7 @@ SQLite에는 모든 시세와 기업정보를 복제하지 않습니다. 검색�
 
 국내 종목의 최소 메타데이터는 보통 매우 작고, 용량 대부분은 사용자가 열어 본 캔들
 캐시입니다. DB 위치는 `minstock --diagnose`에 표시됩니다. 스키마와 마이그레이션은
-프로그램에 포함되어 있어 첫 실행에 자동 생성되고, `minstock sync`가 API에서 받은
+프로그램에 포함되어 있어 첫 실행에 자동 생성되고, `minstock --sync`가 API에서 받은
 종목과 관심종목을 채웁니다. 즉, 사용자는 API 연결과 동기화만 하면 됩니다.
 
 ## 아키텍처

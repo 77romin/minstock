@@ -38,11 +38,13 @@ func run(args []string) error {
 	versionShort := flags.Bool("v", false, "same as --version")
 	syncFlag := flags.Bool("sync", false, "sync instruments and watchlists")
 	syncShort := flags.Bool("sy", false, "same as --sync")
-	setupFlag := flags.Bool("setup", false, "store broker credentials in the OS keychain")
+	setupFlag := flags.Bool("setup", false, "store API credentials in the OS keychain")
 	setupShort := flags.Bool("s", false, "same as --setup")
 	kiwoomFlag := flags.Bool("kiwoom", false, "select Kiwoom for --setup")
 	nhFlag := flags.Bool("nh", false, "select NH for --setup")
 	dividendFlag := flags.Bool("dividend", false, "select dividend data provider for --setup")
+	naverFlag := flags.Bool("naver", false, "select NAVER API HUB for --setup")
+	dartFlag := flags.Bool("dart", false, "select DART for --setup")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -63,19 +65,25 @@ func run(args []string) error {
 	}
 	if *setupFlag {
 		selected := 0
-		for _, enabled := range []bool{*kiwoomFlag, *nhFlag, *dividendFlag} {
+		for _, enabled := range []bool{*kiwoomFlag, *nhFlag, *dividendFlag, *naverFlag, *dartFlag} {
 			if enabled {
 				selected++
 			}
 		}
 		if selected != 1 {
-			return errors.New("--setup requires exactly one flag: --kiwoom, --nh, or --dividend")
+			return errors.New("--setup requires exactly one flag: --kiwoom, --nh, --dividend, --naver, or --dart")
 		}
 		if *kiwoomFlag {
 			return setup("kiwoom")
 		}
 		if *dividendFlag {
 			return setup("dividend")
+		}
+		if *naverFlag {
+			return setup("naver")
+		}
+		if *dartFlag {
+			return setup("dart")
 		}
 		return setup("nh")
 	}
@@ -114,6 +122,16 @@ func run(args []string) error {
 		}
 		return setup(remaining[1])
 	}
+	if len(remaining) > 0 {
+		if len(remaining) == 1 && remaining[0] == "help" {
+			printUsage()
+			return nil
+		}
+		if remaining[0] == "sync" {
+			return errors.New("minstock sync는 지원하지 않습니다. minstock --sync 또는 minstock -sy를 사용하세요")
+		}
+		return fmt.Errorf("알 수 없는 명령 %q", remaining[0])
+	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		return err
@@ -129,23 +147,6 @@ func run(args []string) error {
 		return err
 	}
 	defer rt.Repo.Close()
-
-	if len(remaining) > 0 {
-		switch remaining[0] {
-		case "sync":
-			errs := rt.Service.Sync(context.Background())
-			if len(errs) > 0 {
-				return errors.Join(errs...)
-			}
-			fmt.Println("종목 및 관심종목 동기화 완료")
-			return nil
-		case "help":
-			printUsage()
-			return nil
-		default:
-			return fmt.Errorf("알 수 없는 명령 %q", remaining[0])
-		}
-	}
 
 	program := tea.NewProgram(tui.New(rt.Service, rt.Mode, cfg.App.RefreshInterval))
 	_, err = program.Run()
@@ -252,12 +253,13 @@ func printUsage() {
 
 Usage:
   minstock                         Start the TUI
-  minstock sync                    Sync instrument and watchlist data
-  minstock --sync, -sy             Same as "minstock sync"
+  minstock --sync, -sy             Sync instrument and watchlist data
   minstock setup <kiwoom|nh|dividend|naver|dart> Store API credentials in the OS keychain
   minstock --setup, -s --kiwoom    Store Kiwoom credentials
   minstock --setup, -s --nh        Store NH credentials
   minstock --setup, -s --dividend  Store Alpha Vantage API key
+  minstock --setup, -s --naver     Store NAVER API HUB Client ID / Secret
+  minstock --setup, -s --dart      Store DART disclosure API key
   minstock --diagnose, -d          Check configuration and credential status
   minstock --config <path>         Use an alternate configuration file
   minstock --version, -v           Print the version
