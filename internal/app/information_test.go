@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,6 +13,33 @@ import (
 	"github.com/77romin/minstock-tui/internal/domain"
 	"github.com/77romin/minstock-tui/internal/ports"
 )
+
+func TestDARTTLSFixRetiresOldFailuresButPreservesBackoffAndQuota(t *testing.T) {
+	provider := &informationStub{source: "DART", err: errors.New("DART 회사 매핑: API 네트워크 요청 실패")}
+	s, repo := informationTestService(provider)
+	symbol := domain.Symbol{Code: "005930", Currency: domain.KRW}
+	failure, _ := json.Marshal(struct {
+		Message string
+		RetryAt time.Time
+	}{"DART 회사 매핑: API 네트워크 요청 실패", time.Now().Add(15 * time.Minute)})
+	repo.SaveCache(t.Context(), "failure:information:v1:DART:"+symbol.Key()+":"+symbol.Name, failure)
+	s.Information(t.Context(), symbol)
+	if provider.calls.Load() != 1 {
+		t.Fatal("pre-fix TLS failure prevented retry")
+	}
+	s.Information(t.Context(), symbol)
+	if provider.calls.Load() != 1 {
+		t.Fatal("new failure backoff not retained")
+	}
+	provider.err = errors.New("DART 공시 오류 (상태 020)")
+	symbol.Code = "000660"
+	s.Information(t.Context(), symbol)
+	symbol.Code = "035420"
+	s.Information(t.Context(), symbol)
+	if provider.calls.Load() != 2 {
+		t.Fatal("DART provider-wide quota protection not retained")
+	}
+}
 
 type informationCacheStub struct {
 	ports.Repository
@@ -47,6 +76,35 @@ type informationStub struct {
 	items   []domain.InformationItem
 	started chan struct{}
 	release chan struct{}
+}
+
+func TestInformationUSRequiresExplicitRefresh(t *testing.T) {
+	provider := &informationStub{source: "Alpha Vantage", items: []domain.InformationItem{{Kind: domain.InformationNews, Title: "US news", URL: "https://example.com/us", PublishedAt: time.Now()}}}
+	s, _ := informationTestService(provider)
+	symbol := domain.Symbol{Code: "AAPL", Currency: domain.USD}
+	if report := s.Information(t.Context(), symbol); provider.calls.Load() != 0 || len(report.Items) != 0 {
+		t.Fatal("default detail lookup called US provider")
+	}
+	if report := s.InformationUS(t.Context(), symbol); provider.calls.Load() != 1 || len(report.Items) != 1 {
+		t.Fatal("explicit detail lookup did not fetch US news")
+	}
+	if report := s.Information(t.Context(), symbol); provider.calls.Load() != 1 || len(report.Items) != 1 || report.Sources[0].Freshness != domain.FreshCached {
+		t.Fatal("default lookup did not retain US cache")
+	}
+	s.InformationUS(t.Context(), symbol)
+	if provider.calls.Load() != 1 {
+		t.Fatal("manual lookup bypassed fresh cache")
+	}
+}
+
+func TestInformationUSManualRefreshHonorsProviderQuota(t *testing.T) {
+	provider := &informationStub{source: "Alpha Vantage", err: errors.New("Alpha Vantage 일일 호출 한도를 초과했습니다")}
+	s, _ := informationTestService(provider)
+	s.InformationUS(t.Context(), domain.Symbol{Code: "AAPL", Currency: domain.USD})
+	report := s.InformationUS(t.Context(), domain.Symbol{Code: "GOOGL", Currency: domain.USD})
+	if provider.calls.Load() != 1 || !strings.Contains(report.Sources[0].Warning, "재시도 대기") {
+		t.Fatal("manual action bypassed provider quota protection")
+	}
 }
 
 func (p *informationStub) InformationSource() string              { return p.source }

@@ -68,6 +68,13 @@ func TestExportReadmeScreens(t *testing.T) {
 	m.selected = domain.Symbol{Code: "005930", Name: "삼성전자", Market: domain.MarketKOSPI, Currency: domain.KRW}
 	m.information = s.Information(t.Context(), m.selected)
 	writeReadmeScreen(t, directory, "news", m.View().Content)
+	m.screen, m.previous, m.informationTab = newsFeedScreen, newsFeedScreen, false
+	m.feed = s.NewsFeed(t.Context(), app.NewsFeedSymbols(m.snapshot, false), 0, true)
+	m.feedLive = true
+	if len(m.feed.Entries) > 0 {
+		m.feed.Entries[0].ReadAt = time.Now()
+	}
+	writeReadmeScreen(t, directory, "news-feed", m.View().Content)
 	help, err := exec.Command("go", "run", "../../cmd/minstock", "--help").Output()
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +96,7 @@ func writeReadmeScreen(t *testing.T, directory, name, view string) {
 func ReadmeTerminalHTML(view string) string {
 	sgr := regexp.MustCompile(`\x1b\[([0-9;]*)m`)
 	var out strings.Builder
-	out.WriteString(`<!doctype html><meta charset="utf-8"><title>minstock demo capture</title><style>body{margin:0;background:#10141c;color:#d9e1ed}#terminal{width:max-content;padding:24px;background:#10141c}header{font:13px sans-serif;color:#88a0ba;margin-bottom:18px}pre{margin:0;font:16px/24px "SFMono-Regular",Consolas,"Apple SD Gothic Neo",monospace}pre span{display:inline-block;height:24px;vertical-align:top;white-space:pre}</style><main id="terminal"><header>MINSTOCK 0.3.0 · DEMO / 합성 샘플 · 실제 계좌·뉴스가 아닙니다</header><pre>`)
+	out.WriteString(`<!doctype html><meta charset="utf-8"><title>minstock demo capture</title><style>body{margin:0;background:#10141c;color:#d9e1ed}#terminal{width:max-content;padding:24px;background:#10141c}header{font:13px sans-serif;color:#88a0ba;margin-bottom:18px}pre{margin:0;font:16px/24px "SFMono-Regular",Consolas,"Apple SD Gothic Neo",monospace}pre span{display:inline-block;height:24px;vertical-align:top;white-space:pre}</style><main id="terminal"><header>MINSTOCK 0.4.0 · DEMO / 합성 샘플 · 실제 계좌·뉴스가 아닙니다</header><pre>`)
 	fg, bg, bold := "#d9e1ed", "transparent", false
 	for len(view) > 0 {
 		if location := sgr.FindStringSubmatchIndex(view); location != nil && location[0] == 0 {

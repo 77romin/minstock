@@ -163,6 +163,10 @@ CREATE TABLE IF NOT EXISTS alert_events (
   dedupe_key TEXT NOT NULL UNIQUE,
   occurred_at TEXT NOT NULL,
   acknowledged_at TEXT
+);
+CREATE TABLE IF NOT EXISTS information_reads (
+  article_id TEXT PRIMARY KEY,
+  read_at TEXT NOT NULL
 );`
 	if _, err := r.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate sqlite: %w", err)
@@ -185,7 +189,7 @@ CREATE TABLE IF NOT EXISTS alert_events (
 		return fmt.Errorf("remove legacy demo watchlists: %w", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?),(2, ?),(3, ?),(4, ?),(5, ?),(6, ?),(7, ?),(8, ?)`, now, now, now, now, now, now, now, now)
+	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?),(2, ?),(3, ?),(4, ?),(5, ?),(6, ?),(7, ?),(8, ?),(9, ?)`, now, now, now, now, now, now, now, now, now)
 	return err
 }
 

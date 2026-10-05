@@ -30,16 +30,17 @@ func (m Model) openDetail(symbol domain.Symbol, previous screen) (tea.Model, tea
 	return m, tea.Batch(m.candlesCmd(symbol), m.quoteCmd(symbol))
 }
 
-func (m Model) loadInformation() (tea.Model, tea.Cmd) {
+func (m Model) loadInformation(us ...bool) (tea.Model, tea.Cmd) {
 	if m.informationLoading {
 		return m, nil
 	}
 	m.informationLoading, m.informationLive = true, false
 	m.informationRequest++
-	return m, tea.Batch(m.informationCmd(true), m.informationCmd(false))
+	return m, tea.Batch(m.informationCmd(true), m.informationCmd(false, us...))
 }
 
-func (m Model) informationCmd(cached bool) tea.Cmd {
+func (m Model) informationCmd(cached bool, us ...bool) tea.Cmd {
+	usOnly := len(us) > 0 && us[0]
 	symbol, request := m.selected, m.informationRequest
 	return func() tea.Msg {
 		timeout := 30 * time.Second
@@ -51,6 +52,8 @@ func (m Model) informationCmd(cached bool) tea.Cmd {
 		var report app.InformationReport
 		if cached {
 			report = m.service.CachedInformation(ctx, symbol)
+		} else if usOnly {
+			report = m.service.InformationUS(ctx, symbol)
 		} else {
 			report = m.service.Information(ctx, symbol)
 		}
@@ -86,6 +89,12 @@ func (m Model) handleInformationKey(key string) (tea.Model, tea.Cmd, bool) {
 	case "r":
 		next, cmd := m.loadInformation()
 		return next, cmd, true
+	case "a":
+		if m.selected.Currency != domain.USD && m.selected.Market != domain.MarketUS {
+			return m, nil, true
+		}
+		next, cmd := m.loadInformation(true)
+		return next, cmd, true
 	default:
 		return m, nil, false
 	}
@@ -94,10 +103,14 @@ func (m Model) handleInformationKey(key string) (tea.Model, tea.Cmd, bool) {
 }
 
 func informationOpenCmd(raw string) tea.Cmd {
+	return informationOpenWithCallback(raw, func(err error) tea.Msg { return informationOpenedMsg{err: err} })
+}
+
+func informationOpenWithCallback(raw string, callback func(error) tea.Msg) tea.Cmd {
 	target := domain.InformationURL(raw)
 	if target == "" {
 		return func() tea.Msg {
-			return informationOpenedMsg{err: fmt.Errorf("유효한 HTTP/HTTPS 원문 링크가 없습니다")}
+			return callback(fmt.Errorf("유효한 HTTP/HTTPS 원문 링크가 없습니다"))
 		}
 	}
 	var command *exec.Cmd
@@ -109,7 +122,7 @@ func informationOpenCmd(raw string) tea.Cmd {
 	default:
 		command = exec.Command("xdg-open", target)
 	}
-	return tea.ExecProcess(command, func(err error) tea.Msg { return informationOpenedMsg{err: err} })
+	return tea.ExecProcess(command, callback)
 }
 
 func (m Model) informationView() string {

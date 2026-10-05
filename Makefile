@@ -1,4 +1,4 @@
-VERSION ?= 0.3.0-readonly
+VERSION ?= 0.4.0-readonly
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: build test run fmt check install

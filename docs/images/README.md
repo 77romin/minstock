@@ -14,6 +14,7 @@ README의 화면 미리보기에는 아래 이미지를 사용합니다. 기존 
 | `cli-help.jpg` | 최신 CLI 도움말 | --sync/-sy, NAVER API HUB·DART 등록 |
 | `surge.jpg` | 시장 급등 | 조건, 당일·5분 등락률, 거래량 배수와 분석 근거 |
 | `news.jpg` | 종목 뉴스·공시 | 탭 전환, 메타데이터, 원문 링크와 조회 상태 |
+| `news-feed.jpg` | 통합 뉴스 피드 (0.4.0) | 보유/관심·종류·종목·읽음 필터와 데이터 기준 시각 |
 | `dividends.jpg` | 배당 | 종목별 세전·세후 연간 예상액과 원화 환산 |
 | `allocation.jpg` | 목표 비중 | 범위, 목표/현재/편차와 조회 전용 안내 |
 
@@ -36,9 +37,9 @@ node scripts/serve-readme-captures.mjs "$capture_dir"
 ```
 
 표시된 localhost 주소에서 `/surge.html`, `/news.html`, `/dividends.html`,
-`/allocation.html`, `/cli-help.html`을 열고 `#terminal` 전체를 캡처합니다. 브라우저 캡처는
+`/allocation.html`, `/news-feed.html`, `/cli-help.html`을 열고 `#terminal` 전체를 캡처합니다. 브라우저 캡처는
 JPG로 저장합니다. 현재 터미널 출력의 ANSI 색상·선택 배경·한글 2칸 폭을 유지합니다.
-미리보기 서버는 loopback에서 생성된 다섯 HTML만 제공하며 저장소 전체를 공개하지 않습니다.
+미리보기 서버는 loopback에서 생성된 여섯 HTML만 제공하며 저장소 전체를 공개하지 않습니다.
 캡처가 끝나면 `Ctrl+C`로 서버를 종료합니다.
 
 이 테스트는 정상 테스트 실행에서는 건너뜁니다. 자격증명을 읽는 bootstrap 경로를

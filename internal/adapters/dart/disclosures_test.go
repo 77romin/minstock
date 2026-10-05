@@ -4,15 +4,64 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"github.com/77romin/minstock-tui/internal/adapters/informationhttp"
 	"github.com/77romin/minstock-tui/internal/domain"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestDARTLegacyTLSCompatibilityPreservesSecurity(t *testing.T) {
+	var compressed bytes.Buffer
+	archive := zip.NewWriter(&compressed)
+	file, _ := archive.Create("CORPCODE.xml")
+	file.Write([]byte(`<result><list><corp_code>00126380</corp_code><stock_code>005930</stock_code></list></result>`))
+	archive.Close()
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/corpCode.xml" {
+			w.Write(compressed.Bytes())
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"status": "000", "list": []map[string]string{{"corp_code": "00126380", "stock_code": "005930", "rcept_no": "20261005000001", "report_nm": "분기보고서", "rcept_dt": "20261005"}}})
+	}))
+	server.TLS = &tls.Config{MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12, CipherSuites: []uint16{tls.TLS_RSA_WITH_AES_128_GCM_SHA256}}
+	server.StartTLS()
+	defer server.Close()
+	client, err := New(server.URL, "secret-test-key", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := client.http.Transport.(*http.Transport)
+	if transport.TLSClientConfig.InsecureSkipVerify || transport.TLSClientConfig.MinVersion < tls.VersionTLS12 || client.http.CheckRedirect == nil {
+		t.Fatal("compatibility weakened certificate, protocol, or redirect checks")
+	}
+	// An untrusted certificate must still be rejected, without exposing the key.
+	if _, err := client.Information(t.Context(), domain.Symbol{Code: "005930"}); err == nil || strings.Contains(err.Error(), "secret-test-key") {
+		t.Fatal("untrusted TLS certificate accepted or secret leaked")
+	}
+	trusted, err := New(server.URL, "secret-test-key", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trusted.http.Transport.(*http.Transport).TLSClientConfig.RootCAs = server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+	items, err := trusted.Information(t.Context(), domain.Symbol{Code: "005930"})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("RSA-only TLS server: items=%d err=%v", len(items), err)
+	}
+	// NAVER/US/shared clients retain their default transport and TLS policy.
+	if informationhttp.Client().Transport != nil {
+		t.Fatal("DART compatibility leaked into shared HTTP client")
+	}
+	if err := client.http.CheckRedirect(nil, nil); err == nil {
+		t.Fatal("DART client permits credential-bearing redirects")
+	}
+}
 
 type memoryCache struct {
 	mu      sync.Mutex

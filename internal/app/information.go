@@ -38,13 +38,18 @@ func (s *Service) SetInformationProviders(providers []ports.InformationProvider)
 	s.information = providers
 }
 func (s *Service) Information(ctx context.Context, symbol domain.Symbol) InformationReport {
-	return s.informationReport(ctx, symbol, true)
-}
-func (s *Service) CachedInformation(ctx context.Context, symbol domain.Symbol) InformationReport {
-	return s.informationReport(ctx, symbol, false)
+	return s.informationReport(ctx, symbol, true, false)
 }
 
-func (s *Service) informationReport(ctx context.Context, symbol domain.Symbol, fetch bool) InformationReport {
+// InformationUS explicitly refreshes US news; domestic providers remain cache-only.
+func (s *Service) InformationUS(ctx context.Context, symbol domain.Symbol) InformationReport {
+	return s.informationReport(ctx, symbol, true, true)
+}
+func (s *Service) CachedInformation(ctx context.Context, symbol domain.Symbol) InformationReport {
+	return s.informationReport(ctx, symbol, false, false)
+}
+
+func (s *Service) informationReport(ctx context.Context, symbol domain.Symbol, fetch, usOnly bool) InformationReport {
 	report := InformationReport{}
 	var selected []ports.InformationProvider
 	for _, source := range s.information {
@@ -61,7 +66,8 @@ func (s *Service) informationReport(ctx context.Context, symbol domain.Symbol, f
 		wg.Add(1)
 		go func(i int, source ports.InformationProvider) {
 			defer wg.Done()
-			results[i] = s.loadInformation(ctx, source, symbol, fetch)
+			us := symbol.Currency == domain.USD || symbol.Market == domain.MarketUS || source.InformationSource() == "Alpha Vantage"
+			results[i] = s.loadInformation(ctx, source, symbol, fetch && us == usOnly)
 		}(i, source)
 	}
 	wg.Wait()
@@ -75,6 +81,9 @@ func (s *Service) informationReport(ctx context.Context, symbol domain.Symbol, f
 		report.Items = report.Items[:100]
 	}
 	if symbol.Currency == domain.USD || symbol.Market == domain.MarketUS {
+		if !usOnly {
+			report.Warnings = append(report.Warnings, "미국 뉴스는 캐시만 표시합니다 · a 키로 별도 조회")
+		}
 		if len(selected) == 0 {
 			report.Warnings = []string{"미국 뉴스: minstock setup dividend (기존 Alpha Vantage 키 재사용)"}
 		}
@@ -141,11 +150,17 @@ func (s *Service) loadInformation(ctx context.Context, provider ports.Informatio
 		Message string
 		RetryAt time.Time
 	}
+	failureKey := "failure:" + key
+	if source == "DART" {
+		// Retire failures from the incompatible TLS client without invalidating
+		// successful caches or the provider-wide daily quota protection.
+		failureKey = "failure:dart-tls-v2:" + key
+	}
 	if payload, _, err := s.repo.LoadCache(ctx, "information-quota:v1:"+source); err == nil && json.Unmarshal(payload, &failure) == nil && time.Now().Before(failure.RetryAt) {
 		result.status.Warning = failure.Message + " · 공급자 호출 제한 재시도 대기"
 		return result
 	}
-	if payload, _, err := s.repo.LoadCache(ctx, "failure:"+key); err == nil && json.Unmarshal(payload, &failure) == nil && time.Now().Before(failure.RetryAt) {
+	if payload, _, err := s.repo.LoadCache(ctx, failureKey); err == nil && json.Unmarshal(payload, &failure) == nil && time.Now().Before(failure.RetryAt) {
 		result.status.Warning = failure.Message + " · 재시도 대기"
 		return result
 	}
@@ -157,7 +172,7 @@ func (s *Service) loadInformation(ctx context.Context, provider ports.Informatio
 		}
 		failure.Message, failure.RetryAt = result.status.Warning, time.Now().Add(15*time.Minute)
 		payload, _ := json.Marshal(failure)
-		_ = s.repo.SaveCache(ctx, "failure:"+key, payload)
+		_ = s.repo.SaveCache(ctx, failureKey, payload)
 		if strings.Contains(failure.Message, "일일 호출") || strings.Contains(failure.Message, "HTTP 429") || (source == "DART" && strings.Contains(failure.Message, "상태 020")) {
 			failure.RetryAt = time.Now().Add(24 * time.Hour)
 			payload, _ = json.Marshal(failure)

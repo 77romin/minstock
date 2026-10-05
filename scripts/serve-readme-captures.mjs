@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const root = process.argv[2];
 if (!root || !path.isAbsolute(root)) throw new Error('Absolute capture directory required');
-const allowed = new Set(['surge', 'news', 'dividends', 'allocation', 'cli-help']);
+const allowed = new Set(['surge', 'news', 'news-feed', 'dividends', 'allocation', 'cli-help']);
 const server = http.createServer(async (request, response) => {
   const name = new URL(request.url, 'http://localhost').pathname.slice(1).replace(/\.html$/, '');
   if (!allowed.has(name)) { response.writeHead(404).end(); return; }

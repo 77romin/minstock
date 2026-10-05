@@ -74,6 +74,13 @@ type CacheRepository interface {
 	LoadCache(context.Context, string) ([]byte, time.Time, error)
 }
 
+// InformationReadRepository persists only canonical article identifiers and
+// read timestamps; it never stores article bodies or credentials.
+type InformationReadRepository interface {
+	InformationReadStates(context.Context, []string) (map[string]time.Time, error)
+	SetInformationRead(context.Context, string, bool) (time.Time, error)
+}
+
 type Repository interface {
 	Migrate(context.Context) error
 	UpsertInstruments(context.Context, []domain.Symbol, domain.BrokerID) error

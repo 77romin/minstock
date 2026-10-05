@@ -27,6 +27,7 @@ const (
 	dividendScreen
 	allocationScreen
 	alertScreen
+	newsFeedScreen
 	detailScreen
 	helpScreen
 	diagnosticsScreen
@@ -141,6 +142,21 @@ type Model struct {
 	informationLive     bool
 	informationRequest  uint64
 	informationPendingG bool
+	feed                app.NewsFeedReport
+	feedWatchlist       bool
+	feedLoading         bool
+	feedUSOffset        int
+	feedUS              bool
+	feedLive            bool
+	feedUnread          bool
+	feedKind            int
+	feedSymbol          int
+	feedOffset          int
+	feedWarningPage     int
+	feedRequest         uint64
+	feedCancel          context.CancelFunc
+	feedReadChanges     map[string]time.Time
+	feedReadPending     map[string]bool
 }
 
 type cachedDashboardMsg struct {
@@ -453,6 +469,60 @@ func (m Model) quoteCmd(symbol domain.Symbol) tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case newsFeedMsg:
+		if msg.request == m.feedRequest && (!msg.cached || !m.feedLive) {
+			selectedKey := ""
+			if m.feedSymbol > 0 && m.feedSymbol <= len(m.feed.Symbols) {
+				selectedKey = app.NewsFeedSymbolKey(m.feed.Symbols[m.feedSymbol-1])
+			}
+			m.feed = msg.report
+			if selectedKey != "" {
+				m.feedSymbol = 0
+				for i, symbol := range m.feed.Symbols {
+					if app.NewsFeedSymbolKey(symbol) == selectedKey {
+						m.feedSymbol = i + 1
+						break
+					}
+				}
+			}
+			for i := range m.feed.Entries {
+				if at, ok := m.feedReadChanges[m.feed.Entries[i].ID]; ok {
+					m.feed.Entries[i].ReadAt = at
+				}
+			}
+			if !msg.cached {
+				m.feedLoading, m.feedLive = false, true
+			}
+			if m.screen == newsFeedScreen {
+				m.cursor = min(m.cursor, max(0, len(m.filteredFeed())-1))
+			}
+		}
+	case newsFeedReadMsg:
+		delete(m.feedReadPending, msg.id)
+		if msg.err != nil {
+			m.notice = "읽음 상태 저장 실패: " + msg.err.Error()
+		} else {
+			if m.feedReadChanges == nil {
+				m.feedReadChanges = map[string]time.Time{}
+			}
+			m.feedReadChanges[msg.id] = msg.at
+			for i := range m.feed.Entries {
+				if m.feed.Entries[i].ID == msg.id {
+					m.feed.Entries[i].ReadAt = msg.at
+				}
+			}
+			if m.screen == newsFeedScreen {
+				m.cursor = min(m.cursor, max(0, len(m.filteredFeed())-1))
+			}
+			m.notice = "읽음 상태를 저장했습니다"
+		}
+	case newsFeedOpenedMsg:
+		if msg.err != nil {
+			m.notice = "원문 열기 실패: " + msg.err.Error()
+		} else {
+			cmd := m.feedMarkRead(msg.id, true)
+			return m, cmd
+		}
 	case informationMsg:
 		if msg.symbol.Key() == m.selected.Key() && msg.request == m.informationRequest && (!msg.cached || !m.informationLive) {
 			m.information = msg.report
@@ -630,6 +700,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		updated, cmd := m.handleKey(msg.String())
 		if next, ok := updated.(Model); ok {
+			if m.screen == newsFeedScreen && next.screen != newsFeedScreen && next.feedCancel != nil {
+				next.feedCancel()
+				next.feedLoading = false
+				next.feedRequest++
+			}
+			if next.screen == newsFeedScreen && m.screen != newsFeedScreen && cmd == nil {
+				loaded, loadCmd := next.loadNewsFeed()
+				next, cmd = loaded.(Model), loadCmd
+			}
 			return next.startScanner(cmd)
 		}
 		return updated, cmd
@@ -639,6 +718,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	if key == "ctrl+c" {
+		if m.feedCancel != nil {
+			m.feedCancel()
+		}
 		return m, tea.Quit
 	}
 	if m.screen == allocationScreen && (m.allocationEditing || m.allocationAdding) {
@@ -705,6 +787,15 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	}
 	if m.screen == searchScreen {
 		return m.handleSearchKey(key)
+	}
+	if m.screen == newsFeedScreen {
+		if next, cmd, handled := m.handleFeedKey(key); handled {
+			if model, ok := next.(Model); ok {
+				model.pendingG = false
+				next = model
+			}
+			return next, cmd
+		}
 	}
 	if m.screen == detailScreen && m.informationTab {
 		if next, cmd, handled := m.handleInformationKey(key); handled {
@@ -784,6 +875,9 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case "9":
 		m.screen, m.cursor = alertScreen, 0
 		return m, m.alertCmd()
+	case "0":
+		m.screen, m.cursor = newsFeedScreen, 0
+		return m.loadNewsFeed()
 	case "m":
 		return m.toggleWatchlist()
 	case "f":
@@ -836,7 +930,7 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 		}
 	case "right", "l":
-		if m.screen >= dashboardScreen && m.screen <= alertScreen {
+		if m.screen >= dashboardScreen && m.screen <= newsFeedScreen {
 			m.nextPrimaryScreen(1)
 			if m.screen == allocationScreen {
 				if m.allocationDirty {
@@ -846,7 +940,7 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "left", "h":
-		if m.screen >= dashboardScreen && m.screen <= alertScreen {
+		if m.screen >= dashboardScreen && m.screen <= newsFeedScreen {
 			m.nextPrimaryScreen(-1)
 			if m.screen == allocationScreen {
 				if m.allocationDirty {
@@ -1074,7 +1168,7 @@ func (m Model) handleSearchKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) nextPrimaryScreen(delta int) {
-	screens := []screen{dashboardScreen, portfolioScreen, searchScreen, watchlistScreen, moversScreen, performanceScreen, dividendScreen, allocationScreen, alertScreen}
+	screens := []screen{dashboardScreen, portfolioScreen, searchScreen, watchlistScreen, moversScreen, performanceScreen, dividendScreen, allocationScreen, alertScreen, newsFeedScreen}
 	current := 0
 	for i, candidate := range screens {
 		if m.screen == candidate {
@@ -1247,6 +1341,8 @@ func (m Model) itemCount() int {
 			return len(m.alerts.Rules)
 		}
 		return len(m.alerts.Events)
+	case newsFeedScreen:
+		return len(m.filteredFeed())
 	}
 	return 0
 }
@@ -1313,15 +1409,15 @@ var (
 )
 
 func (m Model) header() string {
-	labels := []string{"1 현황", "2 내 주식", "3 검색", "4 관심", "5 급등", "6 성과", "7 배당", "8 비중", "9 알림"}
+	labels := []string{"1 현황", "2 내 주식", "3 검색", "4 관심", "5 급등", "6 성과", "7 배당", "8 비중", "9 알림", "0 뉴스"}
 	if m.width < 110 {
-		labels = []string{"1현", "2주", "3검", "4관", "5급", "6성", "7배", "8비", "9알"}
+		labels = []string{"1현", "2주", "3검", "4관", "5급", "6성", "7배", "8비", "9알", "0뉴"}
 	}
 	active := m.screen
 	if active == detailScreen || active == helpScreen || active == diagnosticsScreen {
 		active = m.previous
 	}
-	if active < dashboardScreen || active > alertScreen {
+	if active < dashboardScreen || active > newsFeedScreen {
 		active = dashboardScreen
 	}
 	tabs := make([]string, len(labels))
@@ -1336,7 +1432,7 @@ func (m Model) header() string {
 }
 
 func (m Model) body() string {
-	if m.loading && len(m.snapshot.Balances) == 0 && m.screen != detailScreen {
+	if m.loading && len(m.snapshot.Balances) == 0 && m.screen != detailScreen && m.screen != newsFeedScreen {
 		return "\n  데이터를 불러오는 중…"
 	}
 	var body string
@@ -1359,6 +1455,8 @@ func (m Model) body() string {
 		body = m.allocationView()
 	case alertScreen:
 		body = m.alertView()
+	case newsFeedScreen:
+		body = m.newsFeedView()
 	case detailScreen:
 		body = m.detailView()
 	case helpScreen:
@@ -1366,7 +1464,7 @@ func (m Model) body() string {
 	case diagnosticsScreen:
 		body = m.diagnosticsView()
 	}
-	if m.err != nil {
+	if m.err != nil && m.screen != newsFeedScreen {
 		body += "\n" + negative.Render("오류: "+m.err.Error())
 	}
 	return body
@@ -2642,7 +2740,7 @@ func (m Model) helpView() string {
 ←/→, h/l 화면 이동  gg/G 처음/끝        Ctrl+u/d 반 페이지
 gt/gT 다음/이전 화면  / 검색 입력         m 관심종목 토글
 f 시장 필터/보유탭  c USD/KRW 표시 전환
-1~9 주요 화면 이동  ? 도움말
+1~9 주요 화면 이동  0 통합 뉴스  ? 도움말
 
 내 주식
 Tab/Shift+Tab 한국·미국 탭    [/ ] 표 열 이동
@@ -2661,10 +2759,14 @@ Tab 통합·NH·키움 전환    Enter/e 편집    a 종목 추가    r 현재�
 알림
 Tab 이력·목표가 규칙 전환    a 목표가 추가    d 규칙 삭제    x/X 확인/모두 확인
 
+통합 뉴스 (0)
+Tab 보유·관심 전환    f 뉴스·공시    s 종목    u 안 읽음
+Enter/o 원문    x 읽음 전환    r/n 국내 조회    a 미국 조회
+
 상세 차트
 h/l 또는 ←/→ 봉 단위 변경
 Tab 정보·차트 / 뉴스·공시 전환
-뉴스·공시: j/k 이동, Enter/o 원문 브라우저 열기, r 다시 조회
+뉴스·공시: j/k 이동, Enter/o 원문 브라우저 열기, r 국내 조회, a 미국 조회
 
 콜론 명령
 :r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료
@@ -2700,10 +2802,15 @@ func (m Model) footer() string {
 		return brand.Render(" COMMAND :")
 	}
 	base := " ↑↓/jk 이동  Enter 상세  / 검색  : 명령  ? 도움말"
-	if m.screen == detailScreen {
+	if m.screen == newsFeedScreen {
+		base = " Tab 범위 f/s/u 필터 x 읽음 Enter 원문 r/n 국내 a 미국"
+		if m.width < 110 {
+			base = " Tab 범위 f/s/u 필터 x 읽음 Enter 원문 r/n 국내 a 미국"
+		}
+	} else if m.screen == detailScreen {
 		base = " Tab 정보/뉴스  h/l 봉 단위  1~4 MA  Esc 뒤로"
 		if m.informationTab {
-			base = " Tab 차트  j/k 이동  Enter/o 원문  r 조회  Esc 뒤로"
+			base = " Tab 차트 j/k 이동 Enter 원문 r 국내 a 미국 Esc 뒤로"
 		}
 	} else if m.screen == performanceScreen {
 		base = " Tab 표/그래프  t 일/주/월/연  : 명령  ? 도움말"
