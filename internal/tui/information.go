@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/77romin/minstock-tui/internal/app"
 	"github.com/77romin/minstock-tui/internal/domain"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type informationMsg struct {
@@ -25,6 +26,7 @@ func (m Model) openDetail(symbol domain.Symbol, previous screen) (tea.Model, tea
 	m.previous, m.screen, m.selected, m.loading, m.detailQuote = previous, detailScreen, symbol, true, m.snapshot.Quotes[symbol.Key()]
 	m.informationTab, m.informationCursor, m.informationLoading, m.informationLive, m.informationPendingG = false, 0, false, false, false
 	m.information = app.InformationReport{}
+	m.informationInfo = false
 	m.informationRequest++
 	m.err = nil
 	return m, tea.Batch(m.candlesCmd(symbol), m.quoteCmd(symbol))
@@ -64,6 +66,8 @@ func (m Model) informationCmd(cached bool, us ...bool) tea.Cmd {
 func (m Model) handleInformationKey(key string) (tea.Model, tea.Cmd, bool) {
 	count := len(m.information.Items)
 	switch key {
+	case "i":
+		m.informationInfo = !m.informationInfo
 	case "j", "down":
 		m.informationCursor = min(max(0, count-1), m.informationCursor+1)
 	case "k", "up":
@@ -129,8 +133,10 @@ func (m Model) informationView() string {
 	width := max(40, m.width-4)
 	contentWidth := width - 4
 	name := domain.InformationText(m.selected.Name)
-	lines := []string{trim(name+" ("+m.selected.Code+")", contentWidth), "정보·차트  [뉴스·공시] (Tab)", ""}
+	lines := []string{trimDisplay(name+" ("+m.selected.Code+")", contentWidth), "정보·차트  [뉴스·공시] (Tab)"}
 	loc := time.FixedZone("KST", 9*60*60)
+	var statusLines []string
+	warnings := len(m.information.Warnings)
 	for _, source := range m.information.Sources {
 		state := "미조회"
 		if !source.AsOf.IsZero() {
@@ -139,36 +145,32 @@ func (m Model) informationView() string {
 		line := source.Source + " · " + state
 		if source.Warning != "" {
 			line += " · " + source.Warning
+			warnings++
 		}
-		lines = append(lines, trim(line, contentWidth))
+		statusLines = append(statusLines, trimDisplay(domain.InformationText(line), contentWidth))
 	}
 	for _, warning := range m.information.Warnings {
-		lines = append(lines, trim(warning, contentWidth))
+		statusLines = append(statusLines, trimDisplay(domain.InformationText(warning), contentWidth))
+	}
+	if m.informationInfo {
+		lines = append(lines, statusLines[:min(len(statusLines), max(1, min(6, m.height-12)))]...)
+	} else if warnings > 0 {
+		lines = append(lines, fmt.Sprintf("조회 안내 %d건 · i 상태 보기 · 미국 조회 a", warnings))
 	}
 	if m.informationLoading {
 		lines = append(lines, "뉴스·공시를 조회하고 있습니다…")
 	}
 	items := m.information.Items
-	visible := max(1, (m.height-len(lines)-8)/2)
+	var detail []string
+	if m.informationCursor >= 0 && m.informationCursor < len(items) {
+		detail = informationSelection(items[m.informationCursor], contentWidth, max(1, m.height-len(lines)-12), m.informationInfo)
+	}
+	lines = append(lines, "")
+	visible := max(1, m.height-len(lines)-len(detail)-7)
 	start := max(0, m.informationCursor-visible+1)
 	end := min(len(items), start+visible)
 	for i := start; i < end; i++ {
-		item := items[i]
-		kind := "뉴스"
-		date := item.PublishedAt.In(loc).Format("01-02 15:04")
-		if item.Kind == domain.InformationDisclosure {
-			kind = "공시"
-		}
-		if item.DateOnly {
-			date = item.PublishedAt.In(loc).Format("01-02") + " 날짜"
-		}
-		title := fmt.Sprintf("%s %s [%s] %s", cursor(i, m.informationCursor), date, kind, item.Title)
-		lines = append(lines, selectLine(trim(title, contentWidth), i == m.informationCursor))
-		source := "   " + item.Source
-		if item.Relevance != "" {
-			source += " · 관련도 " + item.Relevance
-		}
-		lines = append(lines, trim(source, contentWidth))
+		lines = append(lines, selectLine(informationRow(items[i], cursor(i, m.informationCursor), contentWidth), i == m.informationCursor))
 	}
 	if len(items) == 0 && !m.informationLoading {
 		message := "최근 뉴스·공시가 없습니다."
@@ -181,12 +183,39 @@ func (m Model) informationView() string {
 		}
 		lines = append(lines, message)
 	}
-	if m.informationCursor < len(items) {
-		lines = append(lines, "", trim(items[m.informationCursor].URL, contentWidth))
-	}
-	lines = append(lines, "", trim("제목·출처·원문 링크 · 표시 시각 KST · r 조회는 캐시 주기를 따릅니다", contentWidth))
+	lines = append(lines, detail...)
 	if len(items) > 0 {
 		lines = append(lines, fmt.Sprintf("%d/%d · Enter/o 원문 열기", m.informationCursor+1, len(items)))
 	}
 	return panel.Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func informationRow(item domain.InformationItem, prefix string, width int) string {
+	kind := "뉴스"
+	if item.Kind == domain.InformationDisclosure {
+		kind = "공시"
+	}
+	date := item.PublishedAt.In(time.FixedZone("KST", 9*60*60)).Format("01-02")
+	source := fitCell(trimDisplay(domain.InformationText(item.Source), 10), 10, false)
+	return trimDisplay(fmt.Sprintf("%s %s %s %s %s", prefix, date, kind, source, domain.InformationText(item.Title)), width)
+}
+
+func informationSelection(item domain.InformationItem, width, titleLimit int, info bool) []string {
+	title := strings.Split(ansi.Wrap(domain.InformationText(item.Title), width, ""), "\n")
+	// An unexpectedly large API title must not push the list off-screen.
+	limit := max(1, min(6, titleLimit))
+	if len(title) > limit {
+		title = title[:limit]
+		title[limit-1] = trimDisplay(title[limit-1]+" …", width)
+	}
+	lines := append([]string{"", "선택 기사"}, title...)
+	stamp := item.PublishedAt.In(time.FixedZone("KST", 9*60*60)).Format("01-02 15:04 KST")
+	if item.DateOnly {
+		stamp = item.PublishedAt.In(time.FixedZone("KST", 9*60*60)).Format("01-02") + " 날짜만 제공"
+	}
+	lines = append(lines, trimDisplay(domain.InformationText(item.Source)+" · "+stamp, width), trimDisplay(domain.InformationText(item.URL), width))
+	if info && item.Relevance != "" {
+		lines = append(lines, trimDisplay("관련도 "+domain.InformationText(item.Relevance), width))
+	}
+	return lines
 }

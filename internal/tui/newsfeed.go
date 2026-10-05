@@ -113,6 +113,8 @@ func (m *Model) feedMarkRead(id string, read bool) tea.Cmd {
 func (m Model) handleFeedKey(key string) (tea.Model, tea.Cmd, bool) {
 	items := m.filteredFeed()
 	switch key {
+	case "i":
+		m.feedInfo = !m.feedInfo
 	case "tab", "shift+tab":
 		m.feedWatchlist = !m.feedWatchlist
 		m.feedOffset, m.feedSymbol, m.cursor = 0, 0, 0
@@ -130,6 +132,7 @@ func (m Model) handleFeedKey(key string) (tea.Model, tea.Cmd, bool) {
 		m.feedUnread = !m.feedUnread
 		m.cursor = 0
 	case "w":
+		m.feedInfo = true
 		m.feedWarningPage = (m.feedWarningPage + 1) % max(1, (len(m.feed.Warnings)+1)/2)
 	case "r":
 		next, cmd := m.loadNewsFeed()
@@ -190,7 +193,7 @@ func (m Model) newsFeedView() string {
 	if m.feedUnread {
 		read = "안 읽음"
 	}
-	lines := []string{trim("통합 뉴스·공시 · "+scope+" (Tab)", contentWidth), trim("종류 "+kind+" (f) · 종목 "+symbol+" (s) · "+read+" (u)", contentWidth)}
+	lines := []string{trimDisplay("통합 뉴스·공시 · "+scope+" (Tab)", contentWidth), trimDisplay("종류 "+kind+" (f) · 종목 "+symbol+" (s) · "+read+" (u)", contentWidth)}
 	state := "캐시 표시"
 	if m.feedLive {
 		state = "조회 완료 · 종목별 캐시 주기 적용"
@@ -203,43 +206,54 @@ func (m Model) newsFeedView() string {
 		mode = "미국 별도 조회"
 	}
 	state = mode + " · " + state
-	lines = append(lines, trim(fmt.Sprintf("%s · 대상 %d · 이번 조회 %d", state, m.feed.Total, m.feed.Queried), contentWidth))
+	lines = append(lines, trimDisplay(fmt.Sprintf("%s · 대상 %d · 이번 조회 %d", state, m.feed.Total, m.feed.Queried), contentWidth))
 	if m.feed.Limited {
-		lines = append(lines, trim(fmt.Sprintf("조회 구간 %d~%d · 나머지 캐시 · n 국내 / a 미국 다음", m.feed.Offset+1, min(m.feed.RefreshTotal, m.feed.Offset+app.NewsFeedBatchSize)), contentWidth))
+		lines = append(lines, trimDisplay(fmt.Sprintf("조회 구간 %d~%d · 나머지 캐시 · n 국내 / a 미국 다음", m.feed.Offset+1, min(m.feed.RefreshTotal, m.feed.Offset+app.NewsFeedBatchSize)), contentWidth))
 	}
 	warningStart := (m.feedWarningPage % max(1, (len(m.feed.Warnings)+1)/2)) * 2
-	for i := warningStart; i < min(len(m.feed.Warnings), warningStart+2); i++ {
-		lines = append(lines, trim(domain.InformationText(m.feed.Warnings[i]), contentWidth))
+	if m.feedInfo {
+		for i := warningStart; i < min(len(m.feed.Warnings), warningStart+2); i++ {
+			lines = append(lines, trimDisplay(domain.InformationText(m.feed.Warnings[i]), contentWidth))
+		}
+	} else if len(m.feed.Warnings) > 0 {
+		lines = append(lines, fmt.Sprintf("조회 안내 %d건 · i 상태 보기", len(m.feed.Warnings)))
 	}
-	if len(m.feed.Warnings) > 2 {
+	if m.feedInfo && len(m.feed.Warnings) > 2 {
 		lines = append(lines, fmt.Sprintf("안내 %d/%d · w 다음 안내", warningStart/2+1, (len(m.feed.Warnings)+1)/2))
 	}
 	items := m.filteredFeed()
+	var detail []string
+	if m.cursor >= 0 && m.cursor < len(items) {
+		entry := items[m.cursor]
+		var related []string
+		for _, symbol := range entry.Symbols {
+			related = append(related, domain.InformationText(symbol.Name)+"("+domain.InformationText(symbol.Code)+")")
+		}
+		reserve := 15
+		if m.feedInfo {
+			reserve++
+		}
+		detail = informationSelection(entry.Item, contentWidth, max(1, m.height-len(lines)-reserve), m.feedInfo)
+		detail = append(detail, trimDisplay("관련 종목 · "+strings.Join(related, ", "), contentWidth))
+		if m.feedInfo {
+			stamp := "미조회"
+			if !entry.ObservedAt.IsZero() {
+				stamp = freshnessName(entry.Freshness) + " · " + entry.ObservedAt.In(time.FixedZone("KST", 9*60*60)).Format("01-02 15:04")
+			}
+			detail = append(detail, trimDisplay("데이터 조회 "+stamp, contentWidth))
+		}
+	}
 	lines = append(lines, "")
-	visible := max(1, (m.height-len(lines)-10)/2)
+	visible := max(1, m.height-len(lines)-len(detail)-7)
 	start := max(0, m.cursor-visible+1)
 	end := min(len(items), start+visible)
-	loc := time.FixedZone("KST", 9*60*60)
 	for i := start; i < end; i++ {
 		entry := items[i]
 		status := "●"
 		if !entry.ReadAt.IsZero() {
 			status = "○"
 		}
-		kind := "뉴스"
-		if entry.Item.Kind == domain.InformationDisclosure {
-			kind = "공시"
-		}
-		date := entry.Item.PublishedAt.In(loc).Format("01-02 15:04")
-		if entry.Item.DateOnly {
-			date = entry.Item.PublishedAt.In(loc).Format("01-02") + " 날짜"
-		}
-		lines = append(lines, selectLine(trim(fmt.Sprintf("%s %s %s [%s] %s", cursor(i, m.cursor), status, date, kind, entry.Item.Title), contentWidth), i == m.cursor))
-		var related []string
-		for _, symbol := range entry.Symbols {
-			related = append(related, domain.InformationText(symbol.Name)+"("+domain.InformationText(symbol.Code)+")")
-		}
-		lines = append(lines, trim("   "+entry.Item.Source+" · "+strings.Join(related, ", "), contentWidth))
+		lines = append(lines, selectLine(informationRow(entry.Item, cursor(i, m.cursor)+" "+status, contentWidth), i == m.cursor))
 	}
 	if len(items) == 0 {
 		message := "현재 필터에 표시할 뉴스·공시가 없습니다."
@@ -248,19 +262,12 @@ func (m Model) newsFeedView() string {
 		} else if m.feed.Total == 0 {
 			message = "대상 종목이 없습니다. 보유 계좌를 갱신하거나 관심종목을 추가하세요."
 		}
-		lines = append(lines, trim(message, contentWidth))
+		lines = append(lines, trimDisplay(message, contentWidth))
 	}
-	if m.cursor < len(items) {
-		entry := items[m.cursor]
-		stamp := "미조회"
-		if !entry.ObservedAt.IsZero() {
-			stamp = freshnessName(entry.Freshness) + " · " + entry.ObservedAt.In(loc).Format("01-02 15:04")
-		}
-		lines = append(lines, "", trim(entry.Item.URL, contentWidth), trim("데이터 조회 "+stamp+" · 게시 시각 KST", contentWidth))
-	}
+	lines = append(lines, detail...)
 	if m.notice != "" {
-		lines = append(lines, trim(domain.InformationText(m.notice), contentWidth))
+		lines = append(lines, trimDisplay(domain.InformationText(m.notice), contentWidth))
 	}
-	lines = append(lines, "", trim(fmt.Sprintf("%d건 · ● 안 읽음 / ○ 읽음 · Enter/o 원문 · x 읽음 전환", len(items)), contentWidth))
+	lines = append(lines, "", trimDisplay(fmt.Sprintf("%d건 · ● 안 읽음 / ○ 읽음 · Enter/o 원문 · x 읽음 전환", len(items)), contentWidth))
 	return panel.Width(width).Render(strings.Join(lines, "\n"))
 }

@@ -27,7 +27,7 @@ func feedTestModel() Model {
 }
 func TestNewsFeedFiltersDoNotRequestAPI(t *testing.T) {
 	m := feedTestModel()
-	for _, key := range []string{"f", "s", "u"} {
+	for _, key := range []string{"f", "s", "u", "i"} {
 		next, cmd, handled := m.handleFeedKey(key)
 		if !handled || cmd != nil {
 			t.Fatal("filter created network request")
@@ -113,6 +113,13 @@ func TestNewsFeedViewFitsAndScrolls(t *testing.T) {
 		full := m.View().Content
 		if lipgloss.Width(full) > width || lipgloss.Height(full) > 24 {
 			t.Fatalf("full feed does not fit %dx24: %dx%d", width, lipgloss.Width(full), lipgloss.Height(full))
+		}
+		m.feedInfo = true
+		m.feed.Entries[19].Item.Title += strings.Repeat(" 긴 한글 제목", 30)
+		m.feed.Entries[19].Item.Relevance = "0.999958"
+		full = m.View().Content
+		if lipgloss.Width(full) > width || lipgloss.Height(full) > 24 || !strings.Contains(full, "관련도 0.999958") {
+			t.Fatalf("expanded feed does not fit %dx24: %dx%d\n%s", width, lipgloss.Width(full), lipgloss.Height(full), full)
 		}
 	}
 }

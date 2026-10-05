@@ -137,6 +137,7 @@ type Model struct {
 	scannerAttempt      time.Time
 	information         app.InformationReport
 	informationTab      bool
+	informationInfo     bool
 	informationCursor   int
 	informationLoading  bool
 	informationLive     bool
@@ -147,6 +148,7 @@ type Model struct {
 	feedLoading         bool
 	feedUSOffset        int
 	feedUS              bool
+	feedInfo            bool
 	feedLive            bool
 	feedUnread          bool
 	feedKind            int
@@ -2773,12 +2775,12 @@ Tab 이력·목표가 규칙 전환    a 목표가 추가    d 규칙 삭제    
 
 통합 뉴스 (0)
 Tab 보유·관심 전환    f 뉴스·공시    s 종목    u 안 읽음
-Enter/o 원문    x 읽음 전환    r/n 국내 조회    a 미국 조회
+Enter/o 원문    x 읽음 전환    i 상태    r/n 국내 조회    a 미국 조회
 
 상세 차트
 h/l 또는 ←/→ 봉 단위 변경
 Tab 정보·차트 / 뉴스·공시 전환
-뉴스·공시: j/k 이동, Enter/o 원문 브라우저 열기, r 국내 조회, a 미국 조회
+뉴스·공시: j/k 이동, Enter/o 원문, i 상태·관련도, r 국내 조회, a 미국 조회
 
 콜론 명령
 :r 새로고침   :s 전체 동기화   :d 연결 진단   :q 종료
@@ -2815,14 +2817,14 @@ func (m Model) footer() string {
 	}
 	base := " ↑↓/jk 이동  Enter 상세  / 검색  : 명령  ? 도움말"
 	if m.screen == newsFeedScreen {
-		base = " Tab 범위 f/s/u 필터 x 읽음 Enter 원문 r/n 국내 a 미국"
+		base = " Tab 범위 f/s/u 필터 x 읽음 Enter 원문 i 상태 r/n 국내 a 미국"
 		if m.width < 110 {
-			base = " Tab 범위 f/s/u 필터 x 읽음 Enter 원문 r/n 국내 a 미국"
+			base = " Tab 범위 f/s/u 필터 x 읽음 Enter 원문 i 상태 a 미국"
 		}
 	} else if m.screen == detailScreen {
 		base = " Tab 정보/뉴스  h/l 봉 단위  1~4 MA  Esc 뒤로"
 		if m.informationTab {
-			base = " Tab 차트 j/k 이동 Enter 원문 r 국내 a 미국 Esc 뒤로"
+			base = " Tab 차트 j/k 이동 Enter 원문 i 상태 r 국내 a 미국 Esc 뒤로"
 		}
 	} else if m.screen == performanceScreen {
 		base = " Tab 표/그래프  t 일/주/월/연  : 명령  ? 도움말"

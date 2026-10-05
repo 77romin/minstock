@@ -43,12 +43,49 @@ func TestInformationViewFitsAndScrolls(t *testing.T) {
 		if lipgloss.Width(view) > width || lipgloss.Height(view) > m.height-2 {
 			t.Fatalf("view does not fit: %dx%d\n%s", lipgloss.Width(view), lipgloss.Height(view), view)
 		}
-		if !strings.Contains(view, "기사 19") || !strings.Contains(view, "조회 실패") {
+		if !strings.Contains(view, "기사 19") || !strings.Contains(view, "조회 안내") || strings.Contains(view, "조회 실패") {
 			t.Fatal("selection or source warning missing")
+		}
+		info, cmd, handled := m.handleInformationKey("i")
+		if !handled || cmd != nil || !strings.Contains(info.(Model).informationView(), "조회 실패") {
+			t.Fatal("status toggle did not expose source failures without fetching")
 		}
 		next, _, handled := m.handleInformationKey("k")
 		if !handled || next.(Model).informationCursor != 18 {
 			t.Fatal("article navigation failed")
+		}
+	}
+}
+
+func TestCompactInformationLongTitlesAndExpandedStateFit(t *testing.T) {
+	for _, width := range []int{80, 120} {
+		m := Model{screen: detailScreen, width: width, height: 24, informationTab: true, informationCursor: 19, selected: domain.Symbol{Name: "QQQ 인베스코 ETF", Code: "QQQ"}}
+		m.information.Sources = []app.InformationSourceStatus{{Source: "Alpha Vantage", Warning: "공급자 오류 안내"}}
+		for i := 0; i < 20; i++ {
+			m.information.Items = append(m.information.Items, domain.InformationItem{Kind: domain.InformationNews, Title: fmt.Sprintf("기사 %d ", i) + strings.Repeat("긴 제목 설명 ", 12) + "마지막 제목", Source: "Publisher", URL: "https://example.com/article", Relevance: "0.999958", PublishedAt: time.Now()})
+		}
+		for _, expanded := range []bool{false, true} {
+			m.informationInfo = expanded
+			view := m.View().Content
+			if lipgloss.Width(view) > width || lipgloss.Height(view) > 24 {
+				t.Fatalf("expanded=%v: full view does not fit %dx24: %dx%d\n%s", expanded, width, lipgloss.Width(view), lipgloss.Height(view), view)
+			}
+			if !strings.Contains(view, "선택 기사") || !strings.Contains(view, "마지막 제목") || !strings.Contains(view, "https://example.com/article") {
+				t.Fatal("selected article detail missing")
+			}
+			if strings.Contains(view, "관련도 0.999958") != expanded {
+				t.Fatal("relevance not controlled by info toggle")
+			}
+		}
+	}
+}
+
+func TestInformationRowsNeverWrap(t *testing.T) {
+	item := domain.InformationItem{Kind: domain.InformationNews, Title: strings.Repeat("긴 한글 제목 및 English words ", 20), Source: "Very Long Publisher Name", PublishedAt: time.Now()}
+	for _, width := range []int{72, 112} {
+		row := informationRow(item, ">", width)
+		if lipgloss.Width(row) > width || strings.Contains(row, "\n") || !strings.HasSuffix(row, "…") {
+			t.Fatalf("row should be one truncated line: %q", row)
 		}
 	}
 }
