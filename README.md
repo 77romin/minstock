@@ -8,6 +8,9 @@ NH투자증권(NAMUH PLUG)과 키움증권 OpenAPI에 흩어진 국내·미국�
 실계좌를 다루는 프로그램인 만큼 주문 기능은 의도적으로 제외했습니다. API 키가 없어도
 내장 데모 데이터로 전체 화면과 조작 방식을 확인할 수 있습니다.
 
+현재 버전은 **`0.3.0-readonly`**입니다. 시장 급등 스캐너와 종목별 뉴스·공시를 추가했으며,
+국내 뉴스는 기존 개발자센터가 아닌 **NAVER API HUB**에 연결합니다.
+
 > 급등 분석은 정량 조건을 설명하는 관찰 도구이며 투자 추천이 아닙니다.
 
 ## 프로젝트 소개
@@ -28,6 +31,7 @@ NH투자증권(NAMUH PLUG)과 키움증권 OpenAPI에 흩어진 국내·미국�
 ## 화면 미리보기
 
 주요 화면에서 통합 자산 조회부터 종목 탐색과 연결 진단까지 확인할 수 있습니다.
+급등·뉴스/공시·배당·비중·도움말의 새 캡처는 현재 앱의 실제 화면 출력으로 생성했습니다.
 
 <table>
   <tr>
@@ -56,19 +60,53 @@ NH투자증권(NAMUH PLUG)과 키움증권 OpenAPI에 흩어진 국내·미국�
       <sub><strong>연결 진단</strong> — 공급자별 연결 상태와 데이터 기준 시각</sub>
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/manual.png" alt="minstock CLI 도움말"><br>
-      <sub><strong>CLI 도움말</strong> — 실행·동기화·설정·진단 명령 안내</sub>
+      <img src="docs/images/cli-help.jpg" alt="NAVER API HUB와 DART 등록 및 --sync 옵션이 포함된 최신 CLI 도움말"><br>
+      <sub><strong>CLI 도움말</strong> — --sync/-sy, NAVER·DART 키 등록 안내</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/surge.jpg" alt="시장 급등 스캐너의 조건과 후보별 당일·5분 등락률 및 거래량 배수"><br>
+      <sub><strong>시장 급등</strong> — 보유 종목 밖의 후보와 정량 분석 근거</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/news.jpg" alt="종목 상세의 뉴스·공시 탭, 제목·출처·게시 시각·원문 링크"><br>
+      <sub><strong>뉴스·공시</strong> — 종목 상세에서 Tab 전환, Enter로 원문 열기</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/dividends.jpg" alt="미국주식 연간 세전·세후 예상 배당과 원화 환산액"><br>
+      <sub><strong>배당</strong> — 최근 주당 배당과 보유 수량 기반 연간 예상액</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/allocation.jpg" alt="통합 목표 비중, 현재 비중, 편차와 종목·현금 비중 설정"><br>
+      <sub><strong>목표 비중</strong> — 종목·현금 목표와 현재 편차, 조회 전용</sub>
     </td>
   </tr>
 </table>
 
 > 위 캡처에 표시된 종목·금액·수익률은 가상투자 시뮬레이션을 위해 구성한 합성 샘플
 > 데이터이며, 실제 계좌나 투자 성과를 나타내지 않습니다.
+> 새 뉴스·공시 캡처의 제목·링크도 데모 예시입니다. 실제 뉴스 조회 성공을 입증하는 캡처는 아닙니다.
+> 새 캡처는 mock 공급자와 임시 DB에서 앱의 `View()` 출력을 렌더링해 촬영했으며,
+> OS 키링·실계좌·외부 API에 접근하지 않았습니다.
 
-<!---
 캡처 갱신 방법과 개인정보 확인 항목은
 [스크린샷 가이드](docs/images/README.md)에 정리했습니다.
---->
+
+## 기능별 시작 경로
+
+| 하고 싶은 일 | 화면과 조작 | 필요한 연결 |
+|---|---|---|
+| 계좌·보유 종목 비교 | `1 현황` → `2 내 주식`, `Tab`으로 한국/미국 전환 | NH 또는 키움 |
+| 차트와 종목 뉴스 확인 | 종목 선택 → `Enter` → `Tab` → 기사 선택 → `Enter`/`o` | 차트: 증권사, 국내 뉴스: NAVER API HUB, 공시: DART, 미국 뉴스: Alpha Vantage |
+| 보유하지 않은 급등 후보 탐색 | `5 급등` → 조건·기준 시각 확인 → 후보 선택 → `Enter` | 키움, KRX 최신 1분봉 |
+| 연간·월별 배당 확인 | `7 배당` → `Tab`으로 종목별/월별 전환 | Alpha Vantage, 미국주식·ETF 보유 수량 |
+| 목표 비중과 현재 편차 확인 | `8 비중` → `Tab`으로 범위 선택 → `Enter` 편집 → `s` 저장 | 계좌 자산 + 로컬 목표 설정 |
+
+API 키 없이 보는 데모와 실제 조회는 구분됩니다. 데모의 수익률·뉴스·급등 후보는 합성
+데이터이며, 실제 연결에서는 공급자별 키와 API 지원 범위에 따라 결과가 달라집니다.
 ## 기술 스택
 
 | 영역 | 기술 | 선택 이유 |
@@ -81,6 +119,7 @@ NH투자증권(NAMUH PLUG)과 키움증권 OpenAPI에 흩어진 국내·미국�
 | Numeric | shopspring/decimal | 금액과 수익률 계산에서 부동소수점 오차 방지 |
 | Security | go-keyring | macOS Keychain/Linux Secret Service에 API 자격증명과 토큰 저장 |
 | External API | Kiwoom REST API, NH NAMUH PLUG | 계좌·잔고·시세·종목·캔들 조회 |
+| News / Disclosure | NAVER API HUB, Open DART, Alpha Vantage | 국내 뉴스·공시와 미국 티커별 뉴스·배당 |
 | Quality | Go test, httptest, go vet | 도메인 계산, API 계약, 저장소와 TUI 회귀 검증 |
 
 ## 주요 구현 내용
@@ -208,7 +247,8 @@ TUI 안에서 대부분의 작업을 하므로 옵션은 운영에 필요한 최
 | `minstock --config ./my.toml` | 지정한 설정 파일로 TUI 실행 |
 | `minstock help` | CLI 사용법 출력 |
 
-전역 옵션은 하위 명령보다 앞에 둡니다. 예: `minstock --config ./my.toml sync`.
+설정 파일과 동기화 옵션은 함께 지정할 수 있습니다. 예: `minstock --config ./my.toml --sync`.
+`minstock sync` 하위 명령은 제거했으며 `--sync` 또는 `-sy`만 사용합니다.
 
 `--broker`, `--symbol`, `--interval` 같은 조회 옵션은 만들지 않았습니다. 대화형 TUI에서
 필터와 종목·차트 단위를 바꾸는 편이 더 빠르고, CLI는 설정·진단·동기화처럼 자동화에
@@ -233,6 +273,9 @@ TUI 안에서 대부분의 작업을 하므로 옵션은 운영에 필요한 최
 | `/` | 종목 검색 |
 | 상세 화면 `←`/`→`, `h`/`l` | 틱 → 분 → 일 → 주 → 월 → 년 단위 전환 |
 | 상세 화면 `1`~`4` | MA5·MA20·MA60·MA120 개별 표시 전환 |
+| 상세 화면 `Tab`/`Shift+Tab` | 정보·차트 ↔ 뉴스·공시 전환 |
+| 뉴스·공시 `Enter`/`o` | 선택 기사·공시 원문을 기본 브라우저에서 열기 |
+| 뉴스·공시 `r` | 공급자별 캐시·재시도 주기를 적용해 다시 조회 |
 | `gg`, `G` | 목록의 처음, 끝으로 이동 |
 | `Ctrl+u`, `Ctrl+d` | 반 페이지 위, 아래로 이동 |
 | `gt`, `gT` | 다음, 이전 화면 탭 |
@@ -298,7 +341,8 @@ NH 단독 연결에서는 키움 연결 필요 안내를 표시하고, 데모에
 
 `?`를 누르면 도움말을 열고, 도움말 화면에서 다시 `?`를 누르면 돌아옵니다.
 
-`q`, `r`를 단독으로 누르면 실행되지 않습니다. `?`는 도움말을 엽니다. `3`은 검색 화면의 일반 모드로
+일반 현황에서 `q`, `r`는 단독으로 실행되지 않습니다. 뉴스·공시의 `r` 조회나 비중 편집의
+`r` 현재 비중 복사처럼 화면별 키는 별도로 동작합니다. `?`는 도움말을 엽니다. `3`은 검색 화면의 일반 모드로
 이동할 뿐 바로 입력을 시작하지 않습니다. 검색 화면에서 `/`를 눌러 입력 모드에
 들어가고 `Enter`로 선택 모드로 전환한 다음 `j`/`k`로 결과를 선택합니다.
 
