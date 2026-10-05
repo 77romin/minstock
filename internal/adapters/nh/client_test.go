@@ -13,6 +13,28 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+func TestNHDoesNotRouteUSMarketRequestsToDomesticAPIs(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
+	defer server.Close()
+	client, err := New(server.URL, server.URL, security.Credentials{AppKey: "key", Secret: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	symbol := domain.Symbol{Code: "AAPL", Currency: domain.USD, Market: domain.MarketUS}
+	if _, err := client.Quote(t.Context(), symbol); err == nil {
+		t.Fatal("US quote was accepted")
+	}
+	for _, interval := range []domain.CandleInterval{domain.Interval60Min, domain.IntervalDay} {
+		if _, err := client.Candles(t.Context(), domain.CandleQuery{Symbol: symbol, Interval: interval}); err == nil {
+			t.Fatal("US chart was accepted")
+		}
+	}
+	if called {
+		t.Fatal("US symbol sent to domestic NH API")
+	}
+}
+
 func TestAccountsContract(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

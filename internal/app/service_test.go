@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,6 +13,36 @@ import (
 	"github.com/77romin/minstock-tui/internal/ports"
 	"github.com/shopspring/decimal"
 )
+
+type partialCandleProvider struct {
+	*mock.Provider
+	calls   int
+	candles []domain.Candle
+	err     error
+}
+
+func (p *partialCandleProvider) Candles(context.Context, domain.CandleQuery) ([]domain.Candle, error) {
+	p.calls++
+	return p.candles, p.err
+}
+
+func TestServicePreservesUSChartPartialPageAndError(t *testing.T) {
+	repo := performanceRepository(t)
+	symbol := domain.Symbol{Code: "AAPL", Market: domain.MarketUS, Currency: domain.USD}
+	now := time.Now().Add(-time.Hour)
+	first := &partialCandleProvider{Provider: mock.New(), err: errors.New("continuation failure"), candles: []domain.Candle{{Symbol: symbol, Interval: domain.Interval60Min, OpenTime: now, CloseTime: now.Add(time.Hour), Open: decimal.NewFromInt(199), High: decimal.NewFromInt(201), Low: decimal.NewFromInt(198), Close: decimal.NewFromInt(200), Provider: domain.BrokerMock, Complete: true}}}
+	next := &partialCandleProvider{Provider: mock.New()}
+	s := New(repo, []ports.Provider{first, next}, nil, nil, nil)
+	query := domain.CandleQuery{Symbol: symbol, Interval: domain.Interval60Min, From: now.Add(-time.Hour), To: time.Now(), Limit: 180}
+	candles, err := s.Candles(t.Context(), query)
+	if len(candles) != 1 || err == nil || first.calls != 1 || next.calls != 0 {
+		t.Fatal("partial candles lost or unrelated provider called")
+	}
+	cached, err := repo.LoadCandles(t.Context(), query)
+	if err != nil || len(cached) != 1 {
+		t.Fatal("partial page not cached")
+	}
+}
 
 type multiBalanceProvider struct{ *mock.Provider }
 

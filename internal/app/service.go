@@ -371,12 +371,16 @@ func (s *Service) Candles(ctx context.Context, q domain.CandleQuery) ([]domain.C
 	var errs []error
 	for _, provider := range s.providers {
 		candles, err := provider.Candles(ctx, q)
+		if len(candles) > 0 {
+			// Keep a usable first page visible if a later continuation fails.
+			_ = s.repo.SaveCandles(ctx, candles)
+			return candles, err
+		}
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		_ = s.repo.SaveCandles(ctx, candles)
-		return candles, nil
+		errs = append(errs, fmt.Errorf("%s 차트 응답에 데이터가 없습니다", provider.ID()))
 	}
 	if len(cached) > 0 {
 		return cached, nil

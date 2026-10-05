@@ -29,6 +29,7 @@ func (m Model) openDetail(symbol domain.Symbol, previous screen) (tea.Model, tea
 	m.informationInfo = false
 	m.informationRequest++
 	m.err = nil
+	m.chartErr, m.candles = nil, nil
 	return m, tea.Batch(m.candlesCmd(symbol), m.quoteCmd(symbol))
 }
 

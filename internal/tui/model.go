@@ -138,6 +138,7 @@ type Model struct {
 	information         app.InformationReport
 	informationTab      bool
 	informationInfo     bool
+	chartErr            error
 	informationCursor   int
 	informationLoading  bool
 	informationLive     bool
@@ -679,7 +680,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case candlesMsg:
 		if msg.symbol.Key() == m.selected.Key() && msg.interval == intervals[m.intervalIndex] {
-			m.candles, m.err, m.loading = msg.candles, msg.err, false
+			m.candles, m.chartErr, m.loading = msg.candles, msg.err, false
 		}
 	case quoteMsg:
 		if msg.symbol.Key() == m.selected.Key() && msg.err == nil {
@@ -838,11 +839,13 @@ func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
 		if key == "left" || key == "h" {
 			m.intervalIndex = (m.intervalIndex - 1 + len(intervals)) % len(intervals)
 			m.loading = true
+			m.chartErr = nil
 			return m, m.candlesCmd(m.selected)
 		}
 		if key == "right" || key == "l" {
 			m.intervalIndex = (m.intervalIndex + 1) % len(intervals)
 			m.loading = true
+			m.chartErr = nil
 			return m, m.candlesCmd(m.selected)
 		}
 	}
@@ -1468,6 +1471,9 @@ func (m Model) body() string {
 	}
 	if m.err != nil && m.screen != newsFeedScreen {
 		body += "\n" + negative.Render("오류: "+m.err.Error())
+	}
+	if m.chartErr != nil && m.screen == detailScreen && !m.informationTab {
+		body += "\n" + negative.Render(trimDisplay("차트 조회 오류: "+domain.InformationText(m.chartErr.Error()), max(40, m.width-2)))
 	}
 	return body
 }

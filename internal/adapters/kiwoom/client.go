@@ -767,6 +767,11 @@ func (c *Client) usCandles(ctx context.Context, q domain.CandleQuery) ([]domain.
 		return nil, fmt.Errorf("unsupported US candle interval %s", q.Interval)
 	}
 	var errs []error
+	anchor := q.To
+	if anchor.IsZero() {
+		anchor = time.Now()
+	}
+	anchorDate := anchor.In(time.FixedZone("KST", 9*60*60)).Format("20060102")
 	for _, exchange := range usExchangeCandidates(q.Symbol.Exchange) {
 		body := map[string]string{
 			"stex_tp": exchange, "stk_cd": q.Symbol.Code,
@@ -777,57 +782,108 @@ func (c *Client) usCandles(ctx context.Context, q domain.CandleQuery) ([]domain.
 		case domain.IntervalTick:
 			body["tic_scope"] = "1"
 		case domain.Interval1Min, domain.Interval5Min, domain.Interval15Min, domain.Interval60Min:
-			body["strt_dt"] = q.From.Format("20060102")
+			body["strt_dt"] = anchorDate
 			body["tic_scope"] = strings.TrimSuffix(string(q.Interval), "m")
 		default:
-			body["strt_dt"] = q.From.Format("20060102")
+			body["strt_dt"] = anchorDate
 		}
-		var out struct {
-			Rows []struct {
-				Close             string `json:"cur_prc"`
-				TradeVolume       string `json:"trde_qty"`
-				AccumulatedVolume string `json:"acc_trde_qty"`
-				Turnover          string `json:"acc_trde_prica"`
-				Open              string `json:"open_pric"`
-				High              string `json:"high_pric"`
-				Low               string `json:"low_pric"`
-				Time              string `json:"cntr_tm"`
-				Date              string `json:"dt"`
-			} `json:"result_list"`
+		type chartRow struct {
+			Close             string `json:"cur_prc"`
+			TradeVolume       string `json:"trde_qty"`
+			AccumulatedVolume string `json:"acc_trde_qty"`
+			Turnover          string `json:"acc_trde_prica"`
+			Open              string `json:"open_pric"`
+			High              string `json:"high_pric"`
+			Low               string `json:"low_pric"`
+			Time              string `json:"cntr_tm"`
+			Date              string `json:"dt"`
+			BusinessDate      string `json:"bus_dt"`
 		}
-		if err := c.call(ctx, apiID, "/api/us/chart", body, &out); err != nil {
-			errs = append(errs, err)
+		stampFor := func(row chartRow) (string, string) {
+			stamp, layout := row.Date, "20060102"
+			if stamp == "" {
+				stamp = row.BusinessDate
+			}
+			if row.Time != "" {
+				stamp, layout = row.Time, "20060102150405"
+				if len(stamp) == 6 && len(row.BusinessDate) == 8 {
+					stamp = row.BusinessDate + stamp
+				}
+			}
+			return stamp, layout
+		}
+		target := q.Limit
+		if target <= 0 {
+			target = 300
+		}
+		target = min(target, 1000)
+		var rows []chartRow
+		var fetchErr error
+		continuation, nextKey := "", ""
+		seenKeys := map[string]bool{}
+		seenRows := map[string]bool{}
+		for page := 0; page < 10; page++ {
+			var out struct {
+				Rows []chartRow `json:"result_list"`
+			}
+			cont, key, err := c.callPage(ctx, apiID, "/api/us/chart", body, &out, continuation, nextKey)
+			if err != nil {
+				fetchErr = err
+				break
+			}
+			for _, row := range out.Rows {
+				stamp, _ := stampFor(row)
+				if !seenRows[stamp] {
+					seenRows[stamp] = true
+					rows = append(rows, row)
+				}
+			}
+			if len(rows) >= target || len(out.Rows) == 0 || cont != "Y" || key == "" || seenKeys[key] {
+				break
+			}
+			seenKeys[key] = true
+			continuation, nextKey = cont, key
+			// The existing provider limiter governs all continuation requests.
+		}
+		if len(rows) == 0 && fetchErr != nil {
+			errs = append(errs, fetchErr)
 			continue
 		}
-		if len(out.Rows) == 0 {
+		if len(rows) == 0 {
 			errs = append(errs, fmt.Errorf("%s returned no %s candles for %s", exchange, q.Interval, q.Symbol.Code))
 			continue
 		}
-		limit := q.Limit
-		if limit <= 0 || limit > len(out.Rows) {
-			limit = len(out.Rows)
-		}
+		limit := min(target, len(rows))
 		loc := time.FixedZone("KST", 9*60*60)
 		candles := make([]domain.Candle, 0, limit)
 		symbol := q.Symbol
 		symbol.Market, symbol.Currency, symbol.Exchange = domain.MarketUS, domain.USD, exchange
-		for _, row := range out.Rows[:limit] {
-			stamp, layout := row.Date, "20060102"
-			if row.Time != "" {
-				stamp, layout = row.Time, "20060102150405"
-			}
+		seenTimes := map[time.Time]bool{}
+		for _, row := range rows {
+			stamp, layout := stampFor(row)
 			openTime, err := time.ParseInLocation(layout, stamp, loc)
 			if err != nil {
 				continue
 			}
+			if seenTimes[openTime] || (!q.From.IsZero() && openTime.Before(q.From)) || (!q.To.IsZero() && openTime.After(q.To)) {
+				continue
+			}
+			seenTimes[openTime] = true
 			volume := row.TradeVolume
 			if volume == "" {
 				volume = row.AccumulatedVolume
 			}
 			candles = append(candles, domain.Candle{Symbol: symbol, Interval: q.Interval, OpenTime: openTime, CloseTime: closeTime(openTime, q.Interval), Open: num(row.Open), High: num(row.High), Low: num(row.Low), Close: num(row.Close), Volume: intNum(volume), Turnover: num(row.Turnover), Adjusted: q.Adjusted, Complete: true, Provider: c.ID()})
+			if len(candles) >= target {
+				break
+			}
+		}
+		if len(candles) == 0 {
+			errs = append(errs, fmt.Errorf("%s returned no valid %s candle timestamps for %s", exchange, q.Interval, q.Symbol.Code))
+			continue
 		}
 		sort.Slice(candles, func(i, j int) bool { return candles[i].OpenTime.Before(candles[j].OpenTime) })
-		return candles, nil
+		return candles, fetchErr
 	}
 	return nil, errors.Join(errs...)
 }

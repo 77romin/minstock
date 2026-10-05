@@ -2,6 +2,7 @@ package tui
 
 import (
 	"charm.land/lipgloss/v2"
+	"errors"
 	"fmt"
 	"github.com/77romin/minstock-tui/internal/app"
 	"github.com/77romin/minstock-tui/internal/domain"
@@ -9,6 +10,34 @@ import (
 	"testing"
 	"time"
 )
+
+func TestChartErrorStaysOnChartAndDoesNotPolluteNews(t *testing.T) {
+	symbol := domain.Symbol{Code: "AAPL", Currency: domain.USD, Market: domain.MarketUS}
+	m := Model{screen: detailScreen, width: 100, height: 30, selected: symbol}
+	next, _ := m.Update(candlesMsg{symbol: symbol, interval: intervals[m.intervalIndex], err: errors.New("chart-specific failure")})
+	m = next.(Model)
+	if m.err != nil || m.chartErr == nil || !strings.Contains(m.body(), "chart-specific failure") {
+		t.Fatal("chart error not isolated")
+	}
+	m.informationTab = true
+	if strings.Contains(m.body(), "chart-specific failure") {
+		t.Fatal("chart error leaked into news tab")
+	}
+	// A late chart reply received while reading news must also remain hidden.
+	next, _ = m.Update(candlesMsg{symbol: symbol, interval: intervals[m.intervalIndex], err: errors.New("late chart failure")})
+	m = next.(Model)
+	if strings.Contains(m.body(), "late chart failure") {
+		t.Fatal("late chart error polluted news")
+	}
+	m.informationTab = false
+	if !strings.Contains(m.body(), "late chart failure") {
+		t.Fatal("chart error lost on return")
+	}
+	next, _ = m.openDetail(domain.Symbol{Code: "TSLA", Market: domain.MarketUS, Currency: domain.USD}, portfolioScreen)
+	if next.(Model).chartErr != nil {
+		t.Fatal("new stock inherited old chart error")
+	}
+}
 
 func TestInformationRejectsStaleAndLateCachedResponses(t *testing.T) {
 	symbol := domain.Symbol{Code: "005930", Name: "삼성전자", Currency: domain.KRW}

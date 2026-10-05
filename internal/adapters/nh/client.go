@@ -409,6 +409,9 @@ func (c *Client) foreignPositions(ctx context.Context, accountID string) ([]doma
 }
 
 func (c *Client) Quote(ctx context.Context, symbol domain.Symbol) (domain.Quote, error) {
+	if symbol.Currency == domain.USD || symbol.Market == domain.MarketUS {
+		return domain.Quote{}, fmt.Errorf("NH 미국주식 시세는 미지원입니다 · 키움 연결을 확인하세요")
+	}
 	var out struct {
 		Row map[string]any `json:"Output_0"`
 	}
@@ -423,6 +426,9 @@ func (c *Client) Quote(ctx context.Context, symbol domain.Symbol) (domain.Quote,
 }
 
 func (c *Client) Candles(ctx context.Context, q domain.CandleQuery) ([]domain.Candle, error) {
+	if q.Symbol.Currency == domain.USD || q.Symbol.Market == domain.MarketUS {
+		return nil, fmt.Errorf("NH 미국주식 차트는 미지원입니다 · 키움 연결을 확인하세요")
+	}
 	if q.Interval == domain.IntervalTick || q.Interval == domain.Interval1Min || q.Interval == domain.Interval5Min || q.Interval == domain.Interval15Min || q.Interval == domain.Interval60Min {
 		return nil, fmt.Errorf("NH domestic intraday candles are unavailable; configure Kiwoom for this interval")
 	}
